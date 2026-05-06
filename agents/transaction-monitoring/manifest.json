@@ -1,0 +1,35 @@
+{
+  "agent_id": "pcm-transaction-monitoring",
+  "name": "Transaction Monitoring Agent",
+  "vertical": "private_capital_markets",
+  "version": "1.0.0",
+  "trigger": "stage_6_gate",
+  "pipeline_stage": "monetization",
+  "description": "Monitors fund deployment at Stage 6. Tracks disbursement, flags anomalies, and logs transaction events to audit trail.",
+  "ais_required": true,
+  "sal_logging": "full",
+  "human_gate_required": false,
+  "reversible_actions_only": true,
+  "runtime": "vertex-ai",
+  "model": "gemini-2.0-flash",
+  "max_tokens": 4096,
+  "timeout_seconds": 120,
+  "retry_policy": {
+    "max_attempts": 3,
+    "backoff_seconds": 5
+  },
+  "inputs": [],
+  "outputs": [],
+  "sal_event_types": [
+    "agent_started",
+    "agent_completed",
+    "agent_failed",
+    "decision_logged",
+    "flag_raised"
+  ],
+  "governance": {
+    "sentinel_enforced": true,
+    "policy_set": "pcm-default",
+    "pq_signing": "ML-DSA-65"
+  }
+}

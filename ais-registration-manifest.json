@@ -1,0 +1,130 @@
+{
+  "registration_schema": "1.0.0",
+  "vertical": "private_capital_markets",
+  "platform": "CoreG Financial Trade Platform",
+  "registered_at": "2026-05-05T02:11:05Z",
+  "ais_endpoint": "https://api.agentidentity.systems",
+  "agent_count": 11,
+  "agents": [{
+      "agent_id": "pcm-intake-parser",
+      "name": "Intake Parser",
+      "vertical": "private_capital_markets",
+      "trigger": "new_intake_submission",
+      "pipeline_stage": "intake",
+      "governance": {
+        "sentinel_enforced": true,
+        "sal_logging": "full",
+        "pq_signing": "ML-DSA-65"
+      }
+    },{
+      "agent_id": "pcm-asset-classifier",
+      "name": "Asset Classifier",
+      "vertical": "private_capital_markets",
+      "trigger": "post_intake_parse",
+      "pipeline_stage": "intake",
+      "governance": {
+        "sentinel_enforced": true,
+        "sal_logging": "full",
+        "pq_signing": "ML-DSA-65"
+      }
+    },{
+      "agent_id": "pcm-document-date-validator",
+      "name": "Document Date Validator",
+      "vertical": "private_capital_markets",
+      "trigger": "document_upload",
+      "pipeline_stage": "appraisal_review",
+      "governance": {
+        "sentinel_enforced": true,
+        "sal_logging": "full",
+        "pq_signing": "ML-DSA-65"
+      }
+    },{
+      "agent_id": "pcm-pof-verifier",
+      "name": "POF Verifier",
+      "vertical": "private_capital_markets",
+      "trigger": "stage_2_gate",
+      "pipeline_stage": "kyc_verification",
+      "governance": {
+        "sentinel_enforced": true,
+        "sal_logging": "full",
+        "pq_signing": "ML-DSA-65"
+      }
+    },{
+      "agent_id": "pcm-ofac-screening",
+      "name": "OFAC Screening Agent",
+      "vertical": "private_capital_markets",
+      "trigger": "stage_2_gate",
+      "pipeline_stage": "kyc_verification",
+      "governance": {
+        "sentinel_enforced": true,
+        "sal_logging": "full",
+        "pq_signing": "ML-DSA-65"
+      }
+    },{
+      "agent_id": "pcm-valuation-parser",
+      "name": "Valuation Parser",
+      "vertical": "private_capital_markets",
+      "trigger": "stage_3_gate",
+      "pipeline_stage": "appraisal_review",
+      "governance": {
+        "sentinel_enforced": true,
+        "sal_logging": "full",
+        "pq_signing": "ML-DSA-65"
+      }
+    },{
+      "agent_id": "pcm-bank-routing",
+      "name": "Bank Routing Agent",
+      "vertical": "private_capital_markets",
+      "trigger": "stage_4_gate",
+      "pipeline_stage": "bank_assignment",
+      "governance": {
+        "sentinel_enforced": true,
+        "sal_logging": "full",
+        "pq_signing": "ML-DSA-65"
+      }
+    },{
+      "agent_id": "pcm-token-minting",
+      "name": "Token Minting Agent",
+      "vertical": "private_capital_markets",
+      "trigger": "stage_8_trade_close",
+      "pipeline_stage": "tokenization",
+      "governance": {
+        "sentinel_enforced": true,
+        "sal_logging": "full",
+        "pq_signing": "ML-DSA-65"
+      }
+    },{
+      "agent_id": "pcm-deletion-certification",
+      "name": "Deletion Certification Agent",
+      "vertical": "private_capital_markets",
+      "trigger": "trade_closure_event",
+      "pipeline_stage": "completed",
+      "governance": {
+        "sentinel_enforced": true,
+        "sal_logging": "full",
+        "pq_signing": "ML-DSA-65"
+      }
+    },{
+      "agent_id": "pcm-contract-monitoring",
+      "name": "Contract Monitoring Agent",
+      "vertical": "private_capital_markets",
+      "trigger": "continuous",
+      "pipeline_stage": "all_stages",
+      "governance": {
+        "sentinel_enforced": true,
+        "sal_logging": "full",
+        "pq_signing": "ML-DSA-65"
+      }
+    },{
+      "agent_id": "pcm-transaction-monitoring",
+      "name": "Transaction Monitoring Agent",
+      "vertical": "private_capital_markets",
+      "trigger": "stage_6_gate",
+      "pipeline_stage": "monetization",
+      "governance": {
+        "sentinel_enforced": true,
+        "sal_logging": "full",
+        "pq_signing": "ML-DSA-65"
+      }
+    }]
+}

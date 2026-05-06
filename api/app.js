@@ -1,0 +1,92 @@
+/**
+ * CoreIdentity PCM — API Application
+ * Private Capital Markets Platform
+ * Version: 1.0.0
+ */
+
+'use strict';
+
+const express      = require('express');
+const helmet       = require('helmet');
+const cors         = require('cors');
+const morgan       = require('morgan');
+const rateLimit    = require('express-rate-limit');
+const { v4: uuid } = require('uuid');
+require('dotenv').config();
+
+const { errorHandler }   = require('./middleware/error-handler');
+const { requestLogger }  = require('./middleware/request-logger');
+const { authenticate }   = require('./middleware/authenticate');
+const { authorize }      = require('./middleware/authorize');
+const healthRouter       = require('./routes/health');
+const clientsRouter      = require('./routes/clients');
+const assetsRouter       = require('./routes/assets');
+const pehfRouter         = require('./routes/pehf');
+const formsRouter        = require('./routes/forms');
+const pipelineRouter     = require('./routes/pipeline');
+const authRouter         = require('./routes/auth');
+
+const app  = express();
+const PORT = process.env.PORT || 3001;
+
+// ─── TRUST PROXY (ALB) ────────────────────────────────────────────────────────
+app.set('trust proxy', 1);
+
+// ─── SECURITY MIDDLEWARE ──────────────────────────────────────────────────────
+app.use(helmet());
+app.use(cors({
+  origin: process.env.ALLOWED_ORIGINS?.split(',') || [],
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-ID']
+}));
+
+// ─── RATE LIMITING ────────────────────────────────────────────────────────────
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 200,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests — please try again later.' }
+});
+app.use(limiter);
+
+// ─── REQUEST MIDDLEWARE ───────────────────────────────────────────────────────
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true }));
+app.use((req, _res, next) => {
+  req.requestId = req.headers['x-request-id'] || uuid();
+  next();
+});
+app.use(requestLogger);
+app.use(morgan('combined'));
+
+// ─── ROUTES ───────────────────────────────────────────────────────────────────
+app.use('/health',    healthRouter);
+app.use('/api/v1/auth',     authRouter);
+app.use('/api/v1/clients',  authenticate, clientsRouter);
+app.use('/api/v1/assets',   authenticate, assetsRouter);
+app.use('/api/v1/pehf',     authenticate, pehfRouter);
+app.use('/api/v1/forms',    authenticate, formsRouter);
+app.use('/api/v1/pipeline', authenticate, pipelineRouter);
+
+// ─── 404 ─────────────────────────────────────────────────────────────────────
+app.use((_req, res) => {
+  res.status(404).json({ error: 'Route not found' });
+});
+
+// ─── ERROR HANDLER ────────────────────────────────────────────────────────────
+app.use(errorHandler);
+
+// ─── START ────────────────────────────────────────────────────────────────────
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(JSON.stringify({
+    level: 'info',
+    message: 'PCM API started',
+    port: PORT,
+    environment: process.env.NODE_ENV,
+    timestamp: new Date().toISOString()
+  }));
+});
+
+module.exports = app;
