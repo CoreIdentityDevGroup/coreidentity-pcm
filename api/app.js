@@ -62,6 +62,7 @@ app.use(requestLogger);
 app.use(morgan('combined'));
 
 // ─── ROUTES ───────────────────────────────────────────────────────────────────
+app.get('/ping', (_req, res) => res.json({ ok: true }));
 app.use('/health',    healthRouter);
 app.use('/api/v1/auth',     authRouter);
 app.use('/api/v1/clients',  authenticate, clientsRouter);

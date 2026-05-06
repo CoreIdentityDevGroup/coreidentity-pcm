@@ -6,67 +6,44 @@ const sslConfig = process.env.NODE_ENV === 'production'
   ? { rejectUnauthorized: false }
   : false;
 
+const poolConfig = (host, database, user, password, port) => ({
+  host, database, user, password,
+  port: parseInt(port || '5432'),
+  ssl: sslConfig,
+  max: 10,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 10000
+});
+
 const pools = {
-  clients: new Pool({
-    host:     process.env.PCM_DB_CLIENT_HOST,
-    database: process.env.PCM_DB_CLIENT_NAME,
-    user:     process.env.PCM_DB_CLIENT_USER,
-    password: process.env.PCM_DB_CLIENT_PASSWORD,
-    port:     parseInt(process.env.PCM_DB_CLIENT_PORT || '5432'),
-    ssl:      sslConfig,
-    max:      10,
-    idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 5000
-  }),
-  assets: new Pool({
-    host:     process.env.PCM_DB_ASSET_HOST,
-    database: process.env.PCM_DB_ASSET_NAME,
-    user:     process.env.PCM_DB_ASSET_USER,
-    password: process.env.PCM_DB_ASSET_PASSWORD,
-    port:     parseInt(process.env.PCM_DB_ASSET_PORT || '5432'),
-    ssl:      sslConfig,
-    max:      10,
-    idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 5000
-  }),
-  pehf: new Pool({
-    host:     process.env.PCM_DB_PEHF_HOST,
-    database: process.env.PCM_DB_PEHF_NAME,
-    user:     process.env.PCM_DB_PEHF_USER,
-    password: process.env.PCM_DB_PEHF_PASSWORD,
-    port:     parseInt(process.env.PCM_DB_PEHF_PORT || '5432'),
-    ssl:      sslConfig,
-    max:      10,
-    idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 5000
-  }),
-  forms: new Pool({
-    host:     process.env.PCM_DB_FORMS_HOST,
-    database: process.env.PCM_DB_FORMS_NAME,
-    user:     process.env.PCM_DB_FORMS_USER,
-    password: process.env.PCM_DB_FORMS_PASSWORD,
-    port:     parseInt(process.env.PCM_DB_FORMS_PORT || '5432'),
-    ssl:      sslConfig,
-    max:      10,
-    idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 5000
-  })
+  clients: new Pool(poolConfig(
+    process.env.PCM_DB_CLIENT_HOST,
+    process.env.PCM_DB_CLIENT_NAME,
+    process.env.PCM_DB_CLIENT_USER,
+    process.env.PCM_DB_CLIENT_PASSWORD,
+    process.env.PCM_DB_CLIENT_PORT
+  )),
+  assets: new Pool(poolConfig(
+    process.env.PCM_DB_ASSET_HOST,
+    process.env.PCM_DB_ASSET_NAME,
+    process.env.PCM_DB_ASSET_USER,
+    process.env.PCM_DB_ASSET_PASSWORD,
+    process.env.PCM_DB_ASSET_PORT
+  )),
+  pehf: new Pool(poolConfig(
+    process.env.PCM_DB_PEHF_HOST,
+    process.env.PCM_DB_PEHF_NAME,
+    process.env.PCM_DB_PEHF_USER,
+    process.env.PCM_DB_PEHF_PASSWORD,
+    process.env.PCM_DB_PEHF_PORT
+  )),
+  forms: new Pool(poolConfig(
+    process.env.PCM_DB_FORMS_HOST,
+    process.env.PCM_DB_FORMS_NAME,
+    process.env.PCM_DB_FORMS_USER,
+    process.env.PCM_DB_FORMS_PASSWORD,
+    process.env.PCM_DB_FORMS_PORT
+  ))
 };
-
-// Verify all pools on startup
-async function verifyConnections() {
-  for (const [name, pool] of Object.entries(pools)) {
-    try {
-      const client = await pool.connect();
-      await client.query('SELECT 1');
-      client.release();
-      console.log(JSON.stringify({ level: 'info', message: `DB connected: ${name}`, timestamp: new Date().toISOString() }));
-    } catch (err) {
-      console.error(JSON.stringify({ level: 'error', message: `DB connection failed: ${name}`, error: err.message, timestamp: new Date().toISOString() }));
-    }
-  }
-}
-
-verifyConnections();
 
 module.exports = pools;
