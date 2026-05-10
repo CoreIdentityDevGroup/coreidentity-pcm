@@ -56,4 +56,48 @@ router.get('/verify', (req, res) => {
   } catch { res.status(401).json({ valid: false }); }
 });
 
+
+router.post('/change-password', async (req, res) => {
+  const { current_password, new_password } = req.body;
+  const user_email = req.user?.sub;
+
+  if (!current_password || !new_password)
+    return res.status(400).json({ error: 'current_password and new_password required' });
+
+  if (new_password.length < 10)
+    return res.status(400).json({ error: 'Password must be at least 10 characters' });
+
+  try {
+    const result = await db.clients.query(
+      `SELECT staff_id, password_hash FROM pcm_staff WHERE email = $1 AND active = true`,
+      [user_email]
+    );
+
+    if (!result.rows.length)
+      return res.status(401).json({ error: 'User not found' });
+
+    const user = result.rows[0];
+
+    const verify = await db.clients.query(
+      `SELECT (password_hash = crypt($1, password_hash)) AS valid FROM pcm_staff WHERE staff_id = $2`,
+      [current_password, user.staff_id]
+    );
+
+    if (!verify.rows[0]?.valid)
+      return res.status(401).json({ error: 'Current password is incorrect' });
+
+    await db.clients.query(
+      `UPDATE pcm_staff 
+       SET password_hash = crypt($1, gen_salt('bf', 12)), updated_at = NOW()
+       WHERE staff_id = $2`,
+      [new_password, user.staff_id]
+    );
+
+    res.json({ success: true, message: 'Password changed successfully' });
+  } catch (err) {
+    console.error(JSON.stringify({ level: 'error', message: 'Change password error', error: err.message }));
+    res.status(500).json({ error: 'Failed to change password' });
+  }
+});
+
 module.exports = router;
