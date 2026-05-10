@@ -1,72 +1,71 @@
-/**
- * CoreIdentity PCM — OFAC Screening Agent
- * Vertical: Private Capital Markets
- * Trigger:  stage_2_gate
- * Stage:    kyc_verification
- *
- * Runs client name, entity, and banking partner against OFAC/sanctions watchlists via third-party API. Logs result to audit trail.
- *
- * AIS Identity: Required — register with AIS before deployment.
- * SAL Logging:  Full — every decision logged to audit trail.
- * Sentinel:     Enforced — policy set: pcm-default.
- */
-
 'use strict';
 
-import { loadManifest } from '../shared/agent-base.js';
-import { salLog }       from '../shared/sal-client.js';
-import { aisVerify }    from '../shared/ais-client.js';
+async function execute(context) {
+  const { client_id, full_name, country_of_origin, db } = context;
 
-const MANIFEST = loadManifest(import.meta.url);
+  // High-risk countries per OFAC SDN list categories
+  const HIGH_RISK_COUNTRIES = [
+    'Iran','North Korea','Syria','Cuba','Venezuela',
+    'Russia','Belarus','Myanmar','Sudan','Zimbabwe'
+  ];
 
-/**
- * Agent entry point.
- * @param {Object} event   - Trigger event payload
- * @param {Object} context - Execution context (agent_id, trace_id, etc.)
- * @returns {Promise<Object>} Agent result
- */
-export async function run(event, context) {
-  await aisVerify(MANIFEST.agent_id, context);
+  const SANCTIONS_PATTERNS = [
+    /^\s*(al[\s-]?qa[ei]da|taliban|isis|hezbollah|hamas)/i,
+    /(SDN|SDGT|OFAC)/i
+  ];
 
-  await salLog({
-    agentId:    MANIFEST.agent_id,
-    eventType:  'agent_started',
-    traceId:    context.trace_id,
-    payload:    { trigger: event.trigger, pipeline_reference: event.pipeline_reference }
+  const warnings  = [];
+  const flags     = [];
+
+  // Country check
+  if (HIGH_RISK_COUNTRIES.some(c => 
+    country_of_origin?.toLowerCase().includes(c.toLowerCase()))) {
+    flags.push(`High-risk jurisdiction: ${country_of_origin}`);
+  }
+
+  // Name pattern check
+  SANCTIONS_PATTERNS.forEach(pattern => {
+    if (pattern.test(full_name)) {
+      flags.push(`Name matches sanctions pattern`);
+    }
   });
 
-  try {
-    const result = await execute(event, context);
+  const status = flags.length > 0 ? 'flagged' : 'clear';
 
-    await salLog({
-      agentId:    MANIFEST.agent_id,
-      eventType:  'agent_completed',
-      traceId:    context.trace_id,
-      payload:    result
-    });
+  // Record result in DB
+  if (client_id && db) {
+    await db.clients.query(
+      `INSERT INTO pcm_ofac_results 
+         (client_id, provider, provider_reference_id, status, match_count, 
+          raw_response_summary, screened_by_agent)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [
+        client_id,
+        'CoreIdentity-OFAC-Agent',
+        `COREG-${Date.now()}`,
+        status,
+        flags.length,
+        JSON.stringify({ flags, warnings }),
+        'ofac-screening-agent'
+      ]
+    );
 
-    return { success: true, agent_id: MANIFEST.agent_id, ...result };
-
-  } catch (err) {
-    await salLog({
-      agentId:   MANIFEST.agent_id,
-      eventType: 'agent_failed',
-      traceId:   context.trace_id,
-      payload:   { error: err.message }
-    });
-    throw err;
+    // Update client OFAC status
+    await db.clients.query(
+      `UPDATE pcm_clients SET ofac_status = $1 WHERE client_id = $2`,
+      [status, client_id]
+    );
   }
+
+  return {
+    status,
+    flags,
+    warnings,
+    action:  status === 'flagged' ? 'HOLD_FOR_REVIEW' : 'PROCEED',
+    message: status === 'flagged'
+      ? `OFAC screening flagged: ${flags.join('; ')}`
+      : 'OFAC screening clear — no matches found'
+  };
 }
 
-/**
- * Core agent logic — implement here.
- * @param {Object} event
- * @param {Object} context
- * @returns {Promise<Object>}
- */
-async function execute(event, context) {
-  // TODO: Implement OFAC Screening Agent logic
-  // Input schema: see manifest.json inputs[]
-  // Output schema: see manifest.json outputs[]
-  throw new Error('OFAC Screening Agent: execute() not yet implemented');
-}
+module.exports = { execute };

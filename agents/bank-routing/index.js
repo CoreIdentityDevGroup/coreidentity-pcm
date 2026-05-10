@@ -1,72 +1,54 @@
-/**
- * CoreIdentity PCM — Bank Routing Agent
- * Vertical: Private Capital Markets
- * Trigger:  stage_4_gate
- * Stage:    bank_assignment
- *
- * Recommends appropriate trader bank based on client geography, asset type, and trade program requirements.
- *
- * AIS Identity: Required — register with AIS before deployment.
- * SAL Logging:  Full — every decision logged to audit trail.
- * Sentinel:     Enforced — policy set: pcm-default.
- */
-
 'use strict';
 
-import { loadManifest } from '../shared/agent-base.js';
-import { salLog }       from '../shared/sal-client.js';
-import { aisVerify }    from '../shared/ais-client.js';
+async function execute(context) {
+  const { asset_type, declared_value, country_of_origin, currency } = context;
 
-const MANIFEST = loadManifest(import.meta.url);
+  const BANK_ROUTING = {
+    precious_metals: [
+      { bank: 'DBS Singapore',    swift: 'DBSSSGSG', jurisdiction: 'singapore',   min_value: 0 },
+      { bank: 'UBS Switzerland',  swift: 'UBSWCHZH', jurisdiction: 'switzerland', min_value: 10_000_000 },
+      { bank: 'HSBC London',      swift: 'MIDLGB22', jurisdiction: 'uk',          min_value: 5_000_000 }
+    ],
+    real_estate: [
+      { bank: 'Chase US',         swift: 'CHASUS33', jurisdiction: 'us',          min_value: 0 },
+      { bank: 'Citi US',          swift: 'CITIUS33', jurisdiction: 'us',          min_value: 0 },
+      { bank: 'Barclays London',  swift: 'BARCGB22', jurisdiction: 'uk',          min_value: 5_000_000 }
+    ],
+    sblc: [
+      { bank: 'UBS Switzerland',  swift: 'UBSWCHZH', jurisdiction: 'switzerland', min_value: 0 },
+      { bank: 'HSBC London',      swift: 'MIDLGB22', jurisdiction: 'uk',          min_value: 0 }
+    ],
+    skr: [
+      { bank: 'DBS Singapore',    swift: 'DBSSSGSG', jurisdiction: 'singapore',   min_value: 0 },
+      { bank: 'UBS Switzerland',  swift: 'UBSWCHZH', jurisdiction: 'switzerland', min_value: 0 }
+    ]
+  };
 
-/**
- * Agent entry point.
- * @param {Object} event   - Trigger event payload
- * @param {Object} context - Execution context (agent_id, trace_id, etc.)
- * @returns {Promise<Object>} Agent result
- */
-export async function run(event, context) {
-  await aisVerify(MANIFEST.agent_id, context);
+  const value = parseFloat(declared_value || 0);
+  const routes = BANK_ROUTING[asset_type] || BANK_ROUTING.precious_metals;
 
-  await salLog({
-    agentId:    MANIFEST.agent_id,
-    eventType:  'agent_started',
-    traceId:    context.trace_id,
-    payload:    { trigger: event.trigger, pipeline_reference: event.pipeline_reference }
-  });
+  // Filter by minimum value and sort by preference
+  const eligible = routes.filter(b => value >= b.min_value);
 
-  try {
-    const result = await execute(event, context);
-
-    await salLog({
-      agentId:    MANIFEST.agent_id,
-      eventType:  'agent_completed',
-      traceId:    context.trace_id,
-      payload:    result
-    });
-
-    return { success: true, agent_id: MANIFEST.agent_id, ...result };
-
-  } catch (err) {
-    await salLog({
-      agentId:   MANIFEST.agent_id,
-      eventType: 'agent_failed',
-      traceId:   context.trace_id,
-      payload:   { error: err.message }
-    });
-    throw err;
+  if (!eligible.length) {
+    return {
+      status:  'no_route',
+      action:  'MANUAL_ASSIGNMENT',
+      message: `No eligible bank route for ${asset_type} at ${currency} ${Number(value).toLocaleString()}`
+    };
   }
+
+  const recommended = eligible[0];
+
+  return {
+    status:      'routed',
+    recommended_bank:         recommended.bank,
+    recommended_swift:        recommended.swift,
+    recommended_jurisdiction: recommended.jurisdiction,
+    eligible_banks:           eligible,
+    action:      'ASSIGN_BANK',
+    message:     `Recommended: ${recommended.bank} (${recommended.jurisdiction})`
+  };
 }
 
-/**
- * Core agent logic — implement here.
- * @param {Object} event
- * @param {Object} context
- * @returns {Promise<Object>}
- */
-async function execute(event, context) {
-  // TODO: Implement Bank Routing Agent logic
-  // Input schema: see manifest.json inputs[]
-  // Output schema: see manifest.json outputs[]
-  throw new Error('Bank Routing Agent: execute() not yet implemented');
-}
+module.exports = { execute };

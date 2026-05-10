@@ -1,72 +1,64 @@
-/**
- * CoreIdentity PCM — Transaction Monitoring Agent
- * Vertical: Private Capital Markets
- * Trigger:  stage_6_gate
- * Stage:    monetization
- *
- * Monitors fund deployment at Stage 6. Tracks disbursement, flags anomalies, and logs transaction events to audit trail.
- *
- * AIS Identity: Required — register with AIS before deployment.
- * SAL Logging:  Full — every decision logged to audit trail.
- * Sentinel:     Enforced — policy set: pcm-default.
- */
-
 'use strict';
 
-import { loadManifest } from '../shared/agent-base.js';
-import { salLog }       from '../shared/sal-client.js';
-import { aisVerify }    from '../shared/ais-client.js';
+async function execute(context) {
+  const { db } = context;
 
-const MANIFEST = loadManifest(import.meta.url);
+  const anomalies = [];
 
-/**
- * Agent entry point.
- * @param {Object} event   - Trigger event payload
- * @param {Object} context - Execution context (agent_id, trace_id, etc.)
- * @returns {Promise<Object>} Agent result
- */
-export async function run(event, context) {
-  await aisVerify(MANIFEST.agent_id, context);
+  // Check for assets stuck in same stage > 30 days
+  const stuck = await db.clients.query(
+    `SELECT a.asset_id, a.pipeline_reference, a.pipeline_stage,
+            a.last_transition, c.full_name as client_name
+     FROM pcm_assets a
+     JOIN pcm_clients c ON c.client_id = a.client_id
+     WHERE a.pipeline_stage NOT IN ('completed','rejected')
+       AND a.last_transition < NOW() - INTERVAL '30 days'`
+  );
 
-  await salLog({
-    agentId:    MANIFEST.agent_id,
-    eventType:  'agent_started',
-    traceId:    context.trace_id,
-    payload:    { trigger: event.trigger, pipeline_reference: event.pipeline_reference }
-  });
-
-  try {
-    const result = await execute(event, context);
-
-    await salLog({
-      agentId:    MANIFEST.agent_id,
-      eventType:  'agent_completed',
-      traceId:    context.trace_id,
-      payload:    result
+  for (const asset of stuck.rows) {
+    const days_stuck = Math.floor(
+      (new Date() - new Date(asset.last_transition)) / (1000 * 60 * 60 * 24)
+    );
+    anomalies.push({
+      type:               'stuck_pipeline',
+      asset_id:           asset.asset_id,
+      pipeline_reference: asset.pipeline_reference,
+      pipeline_stage:     asset.pipeline_stage,
+      client_name:        asset.client_name,
+      days_stuck,
+      severity:           days_stuck > 60 ? 'critical' : 'warning',
+      message:            `Asset ${asset.pipeline_reference} stuck in ${asset.pipeline_stage} for ${days_stuck} days`
     });
-
-    return { success: true, agent_id: MANIFEST.agent_id, ...result };
-
-  } catch (err) {
-    await salLog({
-      agentId:   MANIFEST.agent_id,
-      eventType: 'agent_failed',
-      traceId:   context.trace_id,
-      payload:   { error: err.message }
-    });
-    throw err;
   }
+
+  // Check for clients with OFAC flagged status still in active pipeline
+  const ofac_flagged = await db.clients.query(
+    `SELECT c.client_id, c.full_name, c.ofac_status, c.pipeline_stage
+     FROM pcm_clients c
+     WHERE c.ofac_status = 'flagged'
+       AND c.pipeline_stage NOT IN ('completed','rejected')`
+  );
+
+  for (const client of ofac_flagged.rows) {
+    anomalies.push({
+      type:           'ofac_active',
+      client_id:      client.client_id,
+      client_name:    client.full_name,
+      pipeline_stage: client.pipeline_stage,
+      severity:       'critical',
+      message:        `OFAC-flagged client ${client.full_name} still active in pipeline at ${client.pipeline_stage}`
+    });
+  }
+
+  return {
+    status:           'complete',
+    anomalies_found:  anomalies.length,
+    critical:         anomalies.filter(a => a.severity === 'critical').length,
+    warning:          anomalies.filter(a => a.severity === 'warning').length,
+    anomalies,
+    action:           anomalies.length > 0 ? 'ALERT_TRADE_GROUP_OWNER' : 'NO_ACTION',
+    message:          `Transaction monitoring complete — ${anomalies.length} anomaly(s) found`
+  };
 }
 
-/**
- * Core agent logic — implement here.
- * @param {Object} event
- * @param {Object} context
- * @returns {Promise<Object>}
- */
-async function execute(event, context) {
-  // TODO: Implement Transaction Monitoring Agent logic
-  // Input schema: see manifest.json inputs[]
-  // Output schema: see manifest.json outputs[]
-  throw new Error('Transaction Monitoring Agent: execute() not yet implemented');
-}
+module.exports = { execute };

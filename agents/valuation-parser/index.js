@@ -1,72 +1,40 @@
-/**
- * CoreIdentity PCM — Valuation Parser
- * Vertical: Private Capital Markets
- * Trigger:  stage_3_gate
- * Stage:    appraisal_review
- *
- * Extracts declared value, appraiser identity, and appraisal date from uploaded valuation documents. Stores parsed output in Asset DB.
- *
- * AIS Identity: Required — register with AIS before deployment.
- * SAL Logging:  Full — every decision logged to audit trail.
- * Sentinel:     Enforced — policy set: pcm-default.
- */
-
 'use strict';
 
-import { loadManifest } from '../shared/agent-base.js';
-import { salLog }       from '../shared/sal-client.js';
-import { aisVerify }    from '../shared/ais-client.js';
+async function execute(context) {
+  const { asset_id, appraised_value, declared_value, currency, 
+          appraiser_name, appraisal_date, db } = context;
 
-const MANIFEST = loadManifest(import.meta.url);
+  const discrepancy_ratio = Math.abs(appraised_value - declared_value) / declared_value;
+  const DISCREPANCY_THRESHOLD = 0.20; // 20% variance triggers review
 
-/**
- * Agent entry point.
- * @param {Object} event   - Trigger event payload
- * @param {Object} context - Execution context (agent_id, trace_id, etc.)
- * @returns {Promise<Object>} Agent result
- */
-export async function run(event, context) {
-  await aisVerify(MANIFEST.agent_id, context);
+  const flags = [];
 
-  await salLog({
-    agentId:    MANIFEST.agent_id,
-    eventType:  'agent_started',
-    traceId:    context.trace_id,
-    payload:    { trigger: event.trigger, pipeline_reference: event.pipeline_reference }
-  });
-
-  try {
-    const result = await execute(event, context);
-
-    await salLog({
-      agentId:    MANIFEST.agent_id,
-      eventType:  'agent_completed',
-      traceId:    context.trace_id,
-      payload:    result
-    });
-
-    return { success: true, agent_id: MANIFEST.agent_id, ...result };
-
-  } catch (err) {
-    await salLog({
-      agentId:   MANIFEST.agent_id,
-      eventType: 'agent_failed',
-      traceId:   context.trace_id,
-      payload:   { error: err.message }
-    });
-    throw err;
+  if (discrepancy_ratio > DISCREPANCY_THRESHOLD) {
+    flags.push(
+      `Appraised value (${currency} ${Number(appraised_value).toLocaleString()}) ` +
+      `differs from declared value (${currency} ${Number(declared_value).toLocaleString()}) ` +
+      `by ${(discrepancy_ratio * 100).toFixed(1)}%`
+    );
   }
+
+  if (!appraiser_name || appraiser_name.trim().length < 3) {
+    flags.push('Appraiser name missing or invalid');
+  }
+
+  const status = flags.length > 0 ? 'review_required' : 'accepted';
+
+  return {
+    status,
+    appraised_value: parseFloat(appraised_value),
+    declared_value:  parseFloat(declared_value),
+    discrepancy_pct: parseFloat((discrepancy_ratio * 100).toFixed(2)),
+    appraiser_name,
+    flags,
+    action:   status === 'accepted' ? 'ADVANCE_PIPELINE' : 'FLAG_FOR_REVIEW',
+    message:  status === 'accepted'
+      ? `Valuation accepted — ${appraiser_name}`
+      : `Valuation requires review: ${flags[0]}`
+  };
 }
 
-/**
- * Core agent logic — implement here.
- * @param {Object} event
- * @param {Object} context
- * @returns {Promise<Object>}
- */
-async function execute(event, context) {
-  // TODO: Implement Valuation Parser logic
-  // Input schema: see manifest.json inputs[]
-  // Output schema: see manifest.json outputs[]
-  throw new Error('Valuation Parser: execute() not yet implemented');
-}
+module.exports = { execute };

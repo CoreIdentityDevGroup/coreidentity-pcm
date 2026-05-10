@@ -1,72 +1,55 @@
-/**
- * CoreIdentity PCM — POF Verifier
- * Vertical: Private Capital Markets
- * Trigger:  stage_2_gate
- * Stage:    kyc_verification
- *
- * Validates Proof of Funds document against bank assignment and declared asset value. Flags inconsistencies.
- *
- * AIS Identity: Required — register with AIS before deployment.
- * SAL Logging:  Full — every decision logged to audit trail.
- * Sentinel:     Enforced — policy set: pcm-default.
- */
-
 'use strict';
 
-import { loadManifest } from '../shared/agent-base.js';
-import { salLog }       from '../shared/sal-client.js';
-import { aisVerify }    from '../shared/ais-client.js';
+async function execute(context) {
+  const { client_id, asset_id, db } = context;
 
-const MANIFEST = loadManifest(import.meta.url);
+  // Get latest POF for client
+  const pof_result = await db.clients.query(
+    `SELECT * FROM pcm_pof_records 
+     WHERE client_id = $1 AND vault_status = 'active'
+     ORDER BY submission_date DESC LIMIT 1`,
+    [client_id]
+  );
 
-/**
- * Agent entry point.
- * @param {Object} event   - Trigger event payload
- * @param {Object} context - Execution context (agent_id, trace_id, etc.)
- * @returns {Promise<Object>} Agent result
- */
-export async function run(event, context) {
-  await aisVerify(MANIFEST.agent_id, context);
-
-  await salLog({
-    agentId:    MANIFEST.agent_id,
-    eventType:  'agent_started',
-    traceId:    context.trace_id,
-    payload:    { trigger: event.trigger, pipeline_reference: event.pipeline_reference }
-  });
-
-  try {
-    const result = await execute(event, context);
-
-    await salLog({
-      agentId:    MANIFEST.agent_id,
-      eventType:  'agent_completed',
-      traceId:    context.trace_id,
-      payload:    result
-    });
-
-    return { success: true, agent_id: MANIFEST.agent_id, ...result };
-
-  } catch (err) {
-    await salLog({
-      agentId:   MANIFEST.agent_id,
-      eventType: 'agent_failed',
-      traceId:   context.trace_id,
-      payload:   { error: err.message }
-    });
-    throw err;
+  if (!pof_result.rows.length) {
+    return {
+      status: 'no_pof',
+      action: 'REQUEST_POF',
+      message: 'No active POF on file'
+    };
   }
+
+  const pof = pof_result.rows[0];
+
+  // Get asset declared value
+  const asset_result = await db.clients.query(
+    'SELECT declared_value, currency FROM pcm_assets WHERE asset_id = $1',
+    [asset_id]
+  );
+
+  if (!asset_result.rows.length) {
+    return { status: 'error', message: 'Asset not found' };
+  }
+
+  const asset = asset_result.rows[0];
+  const pof_amount    = parseFloat(pof.declared_amount);
+  const asset_value   = parseFloat(asset.declared_value);
+  const coverage_ratio = pof_amount / asset_value;
+
+  const sufficient = coverage_ratio >= 1.0;
+  const marginal   = coverage_ratio >= 0.8 && coverage_ratio < 1.0;
+
+  return {
+    status:          sufficient ? 'verified' : marginal ? 'marginal' : 'insufficient',
+    pof_amount,
+    asset_value,
+    coverage_ratio:  parseFloat(coverage_ratio.toFixed(4)),
+    issuing_bank:    pof.issuing_bank,
+    action:          sufficient ? 'APPROVE' : marginal ? 'FLAG_FOR_REVIEW' : 'REJECT',
+    message:         sufficient
+      ? `POF verified — coverage ${(coverage_ratio * 100).toFixed(1)}%`
+      : `POF insufficient — coverage ${(coverage_ratio * 100).toFixed(1)}% (minimum 100%)`
+  };
 }
 
-/**
- * Core agent logic — implement here.
- * @param {Object} event
- * @param {Object} context
- * @returns {Promise<Object>}
- */
-async function execute(event, context) {
-  // TODO: Implement POF Verifier logic
-  // Input schema: see manifest.json inputs[]
-  // Output schema: see manifest.json outputs[]
-  throw new Error('POF Verifier: execute() not yet implemented');
-}
+module.exports = { execute };

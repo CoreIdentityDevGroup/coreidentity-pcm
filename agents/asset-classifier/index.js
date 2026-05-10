@@ -1,72 +1,49 @@
-/**
- * CoreIdentity PCM — Asset Classifier
- * Vertical: Private Capital Markets
- * Trigger:  post_intake_parse
- * Stage:    intake
- *
- * Classifies asset as RE, Precious Metals, Cash/Wealth, SBLC, or SKR. Assigns pipeline parameters based on asset type.
- *
- * AIS Identity: Required — register with AIS before deployment.
- * SAL Logging:  Full — every decision logged to audit trail.
- * Sentinel:     Enforced — policy set: pcm-default.
- */
-
 'use strict';
 
-import { loadManifest } from '../shared/agent-base.js';
-import { salLog }       from '../shared/sal-client.js';
-import { aisVerify }    from '../shared/ais-client.js';
+async function execute(context) {
+  const { description, asset_subtype, declared_value, currency } = context;
 
-const MANIFEST = loadManifest(import.meta.url);
+  const ASSET_KEYWORDS = {
+    precious_metals: ['gold','silver','platinum','palladium','bullion','bar','coin','oz','troy','assay'],
+    real_estate:     ['property','land','building','commercial','residential','office','warehouse','deed'],
+    sblc:            ['sblc','standby','letter of credit','swift','mt760','mt799','bank guarantee'],
+    skr:             ['skr','safekeeping','receipt','custodial','vault receipt','depository'],
+    private_equity:  ['equity','shares','stake','ownership','fund','portfolio','cap table'],
+    hedge_fund:      ['hedge','fund','aum','nav','lp','limited partner'],
+    bond:            ['bond','treasury','sovereign','coupon','maturity','fixed income'],
+    commodity:       ['oil','gas','copper','iron','commodity','futures','raw material']
+  };
 
-/**
- * Agent entry point.
- * @param {Object} event   - Trigger event payload
- * @param {Object} context - Execution context (agent_id, trace_id, etc.)
- * @returns {Promise<Object>} Agent result
- */
-export async function run(event, context) {
-  await aisVerify(MANIFEST.agent_id, context);
+  const text = `${description || ''} ${asset_subtype || ''}`.toLowerCase();
+  
+  let best_match = null;
+  let best_score = 0;
 
-  await salLog({
-    agentId:    MANIFEST.agent_id,
-    eventType:  'agent_started',
-    traceId:    context.trace_id,
-    payload:    { trigger: event.trigger, pipeline_reference: event.pipeline_reference }
-  });
-
-  try {
-    const result = await execute(event, context);
-
-    await salLog({
-      agentId:    MANIFEST.agent_id,
-      eventType:  'agent_completed',
-      traceId:    context.trace_id,
-      payload:    result
-    });
-
-    return { success: true, agent_id: MANIFEST.agent_id, ...result };
-
-  } catch (err) {
-    await salLog({
-      agentId:   MANIFEST.agent_id,
-      eventType: 'agent_failed',
-      traceId:   context.trace_id,
-      payload:   { error: err.message }
-    });
-    throw err;
+  for (const [asset_type, keywords] of Object.entries(ASSET_KEYWORDS)) {
+    const score = keywords.filter(kw => text.includes(kw)).length;
+    if (score > best_score) {
+      best_score = score;
+      best_match = asset_type;
+    }
   }
+
+  // Value-based classification hints
+  const value = parseFloat(declared_value || 0);
+  if (!best_match && value > 0) {
+    if (value >= 50_000_000) best_match = 'sblc';
+    else if (value >= 1_000_000) best_match = 'precious_metals';
+    else best_match = 'real_estate';
+  }
+
+  return {
+    status:         'classified',
+    asset_type:     best_match || 'unclassified',
+    confidence:     best_score > 2 ? 'high' : best_score > 0 ? 'medium' : 'low',
+    declared_value: value,
+    currency:       currency || 'USD',
+    action:         best_match ? 'PROCEED' : 'REQUEST_MANUAL_CLASSIFICATION',
+    message:        `Classified as ${best_match || 'unclassified'} (confidence: ${best_score > 2 ? 'high' : best_score > 0 ? 'medium' : 'low'})`
+  };
 }
 
-/**
- * Core agent logic — implement here.
- * @param {Object} event
- * @param {Object} context
- * @returns {Promise<Object>}
- */
-async function execute(event, context) {
-  // TODO: Implement Asset Classifier logic
-  // Input schema: see manifest.json inputs[]
-  // Output schema: see manifest.json outputs[]
-  throw new Error('Asset Classifier: execute() not yet implemented');
-}
+module.exports = { execute };

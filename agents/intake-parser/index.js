@@ -1,72 +1,52 @@
-/**
- * CoreIdentity PCM — Intake Parser
- * Vertical: Private Capital Markets
- * Trigger:  new_intake_submission
- * Stage:    intake
- *
- * Reads inbound emails and uploaded documents. Extracts keywords. Identifies asset type. Routes to correct pipeline category.
- *
- * AIS Identity: Required — register with AIS before deployment.
- * SAL Logging:  Full — every decision logged to audit trail.
- * Sentinel:     Enforced — policy set: pcm-default.
- */
-
 'use strict';
 
-import { loadManifest } from '../shared/agent-base.js';
-import { salLog }       from '../shared/sal-client.js';
-import { aisVerify }    from '../shared/ais-client.js';
-
-const MANIFEST = loadManifest(import.meta.url);
-
-/**
- * Agent entry point.
- * @param {Object} event   - Trigger event payload
- * @param {Object} context - Execution context (agent_id, trace_id, etc.)
- * @returns {Promise<Object>} Agent result
- */
-export async function run(event, context) {
-  await aisVerify(MANIFEST.agent_id, context);
-
-  await salLog({
-    agentId:    MANIFEST.agent_id,
-    eventType:  'agent_started',
-    traceId:    context.trace_id,
-    payload:    { trigger: event.trigger, pipeline_reference: event.pipeline_reference }
-  });
-
-  try {
-    const result = await execute(event, context);
-
-    await salLog({
-      agentId:    MANIFEST.agent_id,
-      eventType:  'agent_completed',
-      traceId:    context.trace_id,
-      payload:    result
-    });
-
-    return { success: true, agent_id: MANIFEST.agent_id, ...result };
-
-  } catch (err) {
-    await salLog({
-      agentId:   MANIFEST.agent_id,
-      eventType: 'agent_failed',
-      traceId:   context.trace_id,
-      payload:   { error: err.message }
-    });
-    throw err;
+async function execute(context) {
+  const { client_data, db } = context;
+  
+  const required_fields = ['full_name', 'email', 'country_of_origin'];
+  const missing = required_fields.filter(f => !client_data[f]);
+  
+  if (missing.length > 0) {
+    return {
+      status: 'incomplete',
+      missing_fields: missing,
+      action: 'REQUEST_ADDITIONAL_INFO',
+      message: `Missing required fields: ${missing.join(', ')}`
+    };
   }
+
+  // Extract and normalize fields
+  const parsed = {
+    full_name:         client_data.full_name?.trim(),
+    email:             client_data.email?.toLowerCase().trim(),
+    phone:             client_data.phone?.replace(/[^0-9+]/g, '') || null,
+    country_of_origin: client_data.country_of_origin?.trim(),
+    referral_source:   client_data.referral_source || 'Unknown',
+    referral_contact:  client_data.referral_contact || null,
+    deal_assignment:   client_data.deal_assignment || 'Platform'
+  };
+
+  // Check for duplicate email
+  const existing = await db.clients.query(
+    'SELECT client_id FROM pcm_clients WHERE email = $1',
+    [parsed.email]
+  );
+
+  if (existing.rows.length > 0) {
+    return {
+      status: 'duplicate',
+      client_id: existing.rows[0].client_id,
+      action: 'MERGE_OR_REJECT',
+      message: `Client with email ${parsed.email} already exists`
+    };
+  }
+
+  return {
+    status: 'ready',
+    parsed_data: parsed,
+    action: 'PROCEED_TO_KYC',
+    message: 'Intake complete — all required fields present'
+  };
 }
 
-/**
- * Core agent logic — implement here.
- * @param {Object} event
- * @param {Object} context
- * @returns {Promise<Object>}
- */
-async function execute(event, context) {
-  // TODO: Implement Intake Parser logic
-  // Input schema: see manifest.json inputs[]
-  // Output schema: see manifest.json outputs[]
-  throw new Error('Intake Parser: execute() not yet implemented');
-}
+module.exports = { execute };

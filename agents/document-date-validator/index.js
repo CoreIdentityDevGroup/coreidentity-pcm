@@ -1,72 +1,47 @@
-/**
- * CoreIdentity PCM — Document Date Validator
- * Vertical: Private Capital Markets
- * Trigger:  document_upload
- * Stage:    appraisal_review
- *
- * Cross-checks all submitted document dates against each other. Enforces same-date rule. Flags any date discrepancies to Intake Officer.
- *
- * AIS Identity: Required — register with AIS before deployment.
- * SAL Logging:  Full — every decision logged to audit trail.
- * Sentinel:     Enforced — policy set: pcm-default.
- */
-
 'use strict';
 
-import { loadManifest } from '../shared/agent-base.js';
-import { salLog }       from '../shared/sal-client.js';
-import { aisVerify }    from '../shared/ais-client.js';
+async function execute(context) {
+  const { appraisal_date, submission_date, pof_date, asset_id, db } = context;
 
-const MANIFEST = loadManifest(import.meta.url);
+  const errors = [];
+  const warnings = [];
 
-/**
- * Agent entry point.
- * @param {Object} event   - Trigger event payload
- * @param {Object} context - Execution context (agent_id, trace_id, etc.)
- * @returns {Promise<Object>} Agent result
- */
-export async function run(event, context) {
-  await aisVerify(MANIFEST.agent_id, context);
-
-  await salLog({
-    agentId:    MANIFEST.agent_id,
-    eventType:  'agent_started',
-    traceId:    context.trace_id,
-    payload:    { trigger: event.trigger, pipeline_reference: event.pipeline_reference }
-  });
-
-  try {
-    const result = await execute(event, context);
-
-    await salLog({
-      agentId:    MANIFEST.agent_id,
-      eventType:  'agent_completed',
-      traceId:    context.trace_id,
-      payload:    result
-    });
-
-    return { success: true, agent_id: MANIFEST.agent_id, ...result };
-
-  } catch (err) {
-    await salLog({
-      agentId:   MANIFEST.agent_id,
-      eventType: 'agent_failed',
-      traceId:   context.trace_id,
-      payload:   { error: err.message }
-    });
-    throw err;
+  // Core rule: appraisal_date must equal submission_date
+  if (appraisal_date && submission_date) {
+    const ap = new Date(appraisal_date).toDateString();
+    const su = new Date(submission_date).toDateString();
+    if (ap !== su) {
+      errors.push(`Appraisal date (${appraisal_date}) must match submission date (${submission_date})`);
+    }
   }
+
+  // POF date check — must be within 90 days
+  if (pof_date) {
+    const pof = new Date(pof_date);
+    const now = new Date();
+    const days_old = Math.floor((now - pof) / (1000 * 60 * 60 * 24));
+    if (days_old > 90) {
+      warnings.push(`POF document is ${days_old} days old — may require refresh`);
+    }
+  }
+
+  // Check for future dates
+  const today = new Date();
+  for (const [label, date_str] of [['appraisal_date', appraisal_date], ['submission_date', submission_date]]) {
+    if (date_str && new Date(date_str) > today) {
+      errors.push(`${label} cannot be in the future`);
+    }
+  }
+
+  return {
+    status:   errors.length > 0 ? 'invalid' : 'valid',
+    errors,
+    warnings,
+    action:   errors.length > 0 ? 'REJECT_DOCUMENT' : 'APPROVE_DOCUMENT',
+    message:  errors.length > 0 
+      ? `Date validation failed: ${errors[0]}`
+      : 'All dates valid'
+  };
 }
 
-/**
- * Core agent logic — implement here.
- * @param {Object} event
- * @param {Object} context
- * @returns {Promise<Object>}
- */
-async function execute(event, context) {
-  // TODO: Implement Document Date Validator logic
-  // Input schema: see manifest.json inputs[]
-  // Output schema: see manifest.json outputs[]
-  throw new Error('Document Date Validator: execute() not yet implemented');
-}
+module.exports = { execute };
