@@ -152,7 +152,7 @@ router.get('/:id/kyc', async (req, res, next) => {
   try {
     const result = await db.clients.query(
       `SELECT doc_id, doc_type, doc_subtype, file_name, submission_date,
-              uploaded_at, uploaded_by, vault_status
+              uploaded_at, uploaded_by, vault_status, gcs_object_path
        FROM pcm_kyc_documents
        WHERE client_id = $1 AND vault_status = 'active'
        ORDER BY uploaded_at DESC`,
@@ -192,7 +192,7 @@ router.get('/:id/pof', async (req, res, next) => {
   try {
     const result = await db.clients.query(
       `SELECT pof_id, declared_amount, currency, issuing_bank,
-              submission_date, verified, verified_at, vault_status
+              submission_date, verified, verified_at, vault_status, gcs_object_path
        FROM pcm_pof_records
        WHERE client_id = $1 AND vault_status = 'active'
        ORDER BY created_at DESC`,
