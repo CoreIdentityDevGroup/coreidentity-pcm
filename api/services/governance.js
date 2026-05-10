@@ -99,7 +99,7 @@ async function salLog(event) {
 async function sentinelCheck(action, resource, context = {}) {
   try {
     const result = await makeRequest(
-      `${SENTINEL_URL}/api/v1/sentinel/evaluate`,
+      `${SENTINEL_URL}/api/sentinel/evaluate`,
       'POST',
       { action, resource, context, platform: 'CoreG-PCM' }
     );

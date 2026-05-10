@@ -1,5 +1,6 @@
 'use strict';
 const governance = require('../services/governance');
+const { sentinelCheck } = require('../services/governance');
 'use strict';
 
 const express  = require('express');
