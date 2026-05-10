@@ -27,6 +27,9 @@ const pipelineRouter     = require('./routes/pipeline');
 const authRouter         = require('./routes/auth');
 const uploadRouter       = require('./routes/upload');
 const downloadRouter     = require('./routes/download');
+const clientAuthRouter   = require('./routes/client-auth');
+const referrersRouter    = require('./routes/referrers');
+const leadsRouter        = require('./routes/leads');
 
 const app  = express();
 const PORT = process.env.PORT || 3001;
@@ -68,7 +71,10 @@ app.get('/ping', (_req, res) => res.json({ ok: true }));
 app.use('/health',    healthRouter);
 app.use('/api/v1/auth',     authRouter);
 app.use('/api/v1/upload',   authenticate, uploadRouter);
-app.use('/api/v1/download', authenticate, downloadRouter); // multipart/form-data
+app.use('/api/v1/download',     authenticate, downloadRouter);
+app.use('/api/v1/client-auth',  clientAuthRouter);
+app.use('/api/v1/referrers',    authenticate, referrersRouter);
+app.use('/api/v1/leads',        authenticate, leadsRouter); // multipart/form-data
 app.use('/api/v1/clients',  authenticate, clientsRouter);
 app.use('/api/v1/assets',   authenticate, assetsRouter);
 app.use('/api/v1/pehf',     authenticate, pehfRouter);
