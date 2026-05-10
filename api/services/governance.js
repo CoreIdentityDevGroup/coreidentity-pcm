@@ -112,19 +112,28 @@ async function sentinelCheck(action, resource, context = {}) {
       };
     }
 
-    // If Sentinel unreachable — fail open with warning (governance-in-progress)
-    console.warn(JSON.stringify({
-      level: 'warn',
-      message: 'Sentinel unreachable — failing open',
-      action, resource, status: result.status
+    // Sentinel unreachable — FAIL CLOSE — block action
+    console.error(JSON.stringify({
+      level: 'error',
+      message: 'Sentinel unreachable — FAIL CLOSE — action blocked',
+      action, resource, status: result.status,
+      timestamp: new Date().toISOString()
     }));
-    return { allowed: true, decision: 'ALLOW_DEGRADED', reason: 'Sentinel unavailable' };
+    return { allowed: false, decision: 'BLOCK_SENTINEL_UNAVAILABLE', reason: 'Sentinel enforcement unavailable — action blocked per fail-close policy' };
 
   } catch (err) {
     console.error(JSON.stringify({
       level: 'error', message: 'Sentinel check failed', error: err.message
     }));
-    return { allowed: true, decision: 'ALLOW_ERROR', reason: err.message };
+    // Sentinel error — FAIL CLOSE
+    console.error(JSON.stringify({
+      level: 'error',
+      message: 'Sentinel error — FAIL CLOSE',
+      error: err.message,
+      action, resource,
+      timestamp: new Date().toISOString()
+    }));
+    return { allowed: false, decision: 'BLOCK_SENTINEL_ERROR', reason: `Sentinel error — action blocked: ${err.message}` };
   }
 }
 
