@@ -1,4 +1,5 @@
 'use strict';
+const governance = require('../services/governance');
 const express      = require('express');
 const { runAgent, runMonitoringCycle } = require('../../agent-orchestrator');
 const router       = express.Router();
@@ -11,6 +12,15 @@ router.post('/run', async (req, res) => {
 
   try {
     const result = await runAgent(agent_name, context || {});
+    // Log agent action to SAL
+    governance.onAgentAction({
+      agent_name,
+      action: result.action || 'EXECUTE',
+      status: result.status,
+      resource: `pcm:agent:${agent_name}`,
+      context: { ...context }
+    }).catch(() => {});
+
     res.json({ agent: agent_name, result });
   } catch (err) {
     res.status(500).json({ error: err.message });

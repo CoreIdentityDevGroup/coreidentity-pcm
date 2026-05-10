@@ -1,4 +1,5 @@
 'use strict';
+const governance = require('../services/governance');
 const express = require('express');
 const jwt     = require('jsonwebtoken');
 const db      = require('../services/db');
@@ -39,6 +40,13 @@ router.post('/login', async (req, res) => {
       secret,
       { expiresIn: '8h' }
     );
+
+    // Log auth event to SAL
+    governance.onAuthEvent({
+      email, role: user.role,
+      success: true,
+      ip: req.ip || req.headers['x-forwarded-for']
+    }).catch(() => {});
 
     res.json({ token, role: user.role, name: user.name });
   } catch (err) {

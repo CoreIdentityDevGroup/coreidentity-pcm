@@ -1,4 +1,5 @@
 'use strict';
+const governance = require('../services/governance');
 const express = require('express');
 const multer  = require('multer');
 const { Storage } = require('@google-cloud/storage');
@@ -52,6 +53,14 @@ router.post('/', upload.single('file'), async (req, res) => {
       metadata: { contentType: file.mimetype },
       resumable: false
     });
+
+    // Log document upload to SAL
+    governance.onDocumentUpload({
+      client_id, asset_id,
+      doc_type: doc_category,
+      file_name: file.originalname,
+      uploaded_by: req.user?.sub || 'system'
+    }).catch(() => {});
 
     res.json({
       success:     true,
