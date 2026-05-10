@@ -1,0 +1,46 @@
+[
+  {
+    "name": "coreg-intake-parser",
+    "agent_id": "85039e46-e7b6-43ee-aa4a-968c3874ae51"
+  },
+  {
+    "name": "coreg-asset-classifier",
+    "agent_id": "095e0ab9-0b82-4ebd-b030-755a3d94b506"
+  },
+  {
+    "name": "coreg-document-date-validator",
+    "agent_id": "4c88c7f9-ec4c-4ca7-b666-f9983a3d6fdf"
+  },
+  {
+    "name": "coreg-pof-verifier",
+    "agent_id": "df456d13-aedb-4aa3-8a9e-873d5003ddb2"
+  },
+  {
+    "name": "coreg-ofac-screening",
+    "agent_id": "2f920cf7-e10e-48e7-a092-baffb4feffc1"
+  },
+  {
+    "name": "coreg-valuation-parser",
+    "agent_id": "e527631f-934e-40f3-9961-9d7287392ff8"
+  },
+  {
+    "name": "coreg-bank-routing",
+    "agent_id": "ccced9e1-4f0b-4a4e-9dab-070588eae24e"
+  },
+  {
+    "name": "coreg-token-minting",
+    "agent_id": "2cddcbb1-75f5-4825-9224-125df8186471"
+  },
+  {
+    "name": "coreg-deletion-certification",
+    "agent_id": "0fe05e5e-62ca-43a5-b911-f9cfe63ca46f"
+  },
+  {
+    "name": "coreg-contract-monitoring",
+    "agent_id": "b8084603-1362-42be-bd78-c8cc68e9a131"
+  },
+  {
+    "name": "coreg-transaction-monitoring",
+    "agent_id": "f9a74efe-40e1-49d5-83bf-638019ee1813"
+  }
+]
