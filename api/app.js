@@ -25,6 +25,7 @@ const pehfRouter         = require('./routes/pehf');
 const formsRouter        = require('./routes/forms');
 const pipelineRouter     = require('./routes/pipeline');
 const authRouter         = require('./routes/auth');
+const uploadRouter       = require('./routes/upload');
 
 const app  = express();
 const PORT = process.env.PORT || 3001;
@@ -65,6 +66,7 @@ app.use(morgan('combined'));
 app.get('/ping', (_req, res) => res.json({ ok: true }));
 app.use('/health',    healthRouter);
 app.use('/api/v1/auth',     authRouter);
+app.use('/api/v1/upload',   authenticate, uploadRouter); // multipart/form-data
 app.use('/api/v1/clients',  authenticate, clientsRouter);
 app.use('/api/v1/assets',   authenticate, assetsRouter);
 app.use('/api/v1/pehf',     authenticate, pehfRouter);
