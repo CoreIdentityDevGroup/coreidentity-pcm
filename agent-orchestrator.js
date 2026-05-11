@@ -1,5 +1,25 @@
 'use strict';
 
+const { execSync } = require('child_process');
+
+// Load AIS agent keys from Secrets Manager at startup
+let aisKeys = null;
+function getAisKeys() {
+  if (aisKeys) return aisKeys;
+  try {
+    const result = execSync(
+      'aws secretsmanager get-secret-value --region us-east-2 --secret-id coreidentity/coreg/ais-agent-keys --query SecretString --output text',
+      { encoding: 'utf8', timeout: 5000 }
+    );
+    aisKeys = JSON.parse(result.trim());
+    console.log(JSON.stringify({ level: 'info', message: 'AIS agent keys loaded', count: Object.keys(aisKeys).length }));
+  } catch (err) {
+    console.warn(JSON.stringify({ level: 'warn', message: 'AIS keys unavailable', error: err.message }));
+    aisKeys = {};
+  }
+  return aisKeys;
+}
+
 const db = require('./api/services/db');
 
 // Load all agents
@@ -21,6 +41,14 @@ async function runAgent(name, context) {
   const agent = agents[name];
   if (!agent) throw new Error(`Agent not found: ${name}`);
   
+  // Inject AIS identity for this agent
+  const keys = getAisKeys();
+  const agentKey = keys[name];
+  if (agentKey) {
+    context.ais_agent_id = agentKey.agent_id;
+    context.ais_api_key  = agentKey.api_key;
+  }
+
   const start = Date.now();
   console.log(JSON.stringify({
     level: 'info',
