@@ -39,7 +39,7 @@ router.post('/', async (req, res) => {
           referral_type, referrer_id, notes)
        VALUES ($1,$2,$3,$4,$5,$6,$7)
        RETURNING *`,
-      [req.user.sub, client_name, contact_info, service_type,
+      [req.user?.sub || 'system', client_name, contact_info, service_type,
        referral_type, referrer_id, notes]
     );
     res.status(201).json(result.rows[0]);
@@ -66,5 +66,51 @@ router.patch('/:id', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// POST /api/v1/leads/public — no auth required — public intake form
+router.post('/public', async (req, res, next) => {
+  try {
+    const {
+      client_name, contact_info, service_type, referral_type,
+      notes, role, estimated_value, currency
+    } = req.body;
+
+    if (!client_name || !contact_info) {
+      return res.status(400).json({ error: 'client_name and contact_info required' });
+    }
+
+    const result = await db.clients.query(
+      `INSERT INTO pcm_leads
+         (client_name, contact_info, service_type, referral_type,
+          notes, status, submitted_by)
+       VALUES ($1, $2, $3, $4, $5, 'new', 'public-intake')
+       RETURNING lead_id, client_name, status, created_at`,
+      [client_name, contact_info,
+       service_type || null,
+       referral_type || role || null,
+       [notes, estimated_value ? `Est. Value: ${currency || 'USD'} ${estimated_value}` : '']
+         .filter(Boolean).join(' | ') || null]
+    );
+
+    const lead = result.rows[0];
+
+    // SAL governance log — non-blocking
+    const { salLog } = require('../services/governance');
+    salLog({
+      action:   'PUBLIC_INTAKE_SUBMISSION',
+      resource: `pcm:lead:${lead.lead_id}`,
+      decision: 'ALLOW',
+      context:  { client_name, contact_info, role, service_type }
+    }).catch(() => {});
+
+    res.status(201).json({
+      success:   true,
+      lead_id:   lead.lead_id,
+      reference: `COREG-${lead.lead_id.split('-')[0].toUpperCase()}`,
+      message:   'Intake submitted successfully'
+    });
+  } catch (err) { next(err); }
+});
+
 
 module.exports = router;

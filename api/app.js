@@ -75,6 +75,7 @@ app.use('/api/v1/upload',   authenticate, uploadRouter);
 app.use('/api/v1/download',     authenticate, downloadRouter);
 app.use('/api/v1/client-auth',  clientAuthRouter);
 app.use('/api/v1/referrers',    authenticate, referrersRouter);
+app.use('/api/v1/leads/public',  leadsRouter);
 app.use('/api/v1/leads',        authenticate, leadsRouter);
 app.use('/api/v1/agents',       authenticate, agentsRouter); // multipart/form-data
 app.use('/api/v1/clients',  authenticate, clientsRouter);
