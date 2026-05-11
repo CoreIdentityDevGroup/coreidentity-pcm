@@ -113,4 +113,31 @@ router.post('/public', async (req, res, next) => {
 });
 
 
+// POST /api/v1/leads/terms-acceptance — log T&C acceptance with IP
+router.post('/terms-acceptance', async (req, res, next) => {
+  try {
+    const { accepted, version, timestamp, user_agent } = req.body;
+    const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim()
+               || req.socket?.remoteAddress
+               || 'unknown';
+
+    // Log to SAL — immutable governance record
+    const { salLog } = require('../services/governance');
+    await salLog({
+      action:   'TERMS_ACCEPTANCE',
+      resource: 'pcm:intake:terms',
+      decision: accepted ? 'ALLOW' : 'BLOCK',
+      context:  { ip, version, timestamp, user_agent: user_agent?.substring(0, 100) }
+    });
+
+    res.status(201).json({
+      recorded:  true,
+      ip,
+      version,
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) { next(err); }
+});
+
+
 module.exports = router;
