@@ -1,4 +1,5 @@
 'use strict';
+const notifier = require('./notifier');
 
 const https = require('https');
 const http  = require('http');
@@ -226,6 +227,12 @@ async function onOFACScreening(data) {
   });
 
   if (status === 'flagged') {
+    notifier.notifyAlert({
+      severity: 'critical',
+      message: `OFAC flagged: ${full_name} — ${flags.join(', ')}`,
+      pipeline_reference: client_id
+    }).catch(() => {});
+
     await agoDispatch({
       type:     'COMPLIANCE_ALERT',
       payload:  { client_id, status, flags },

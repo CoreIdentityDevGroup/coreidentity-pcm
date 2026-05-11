@@ -66,6 +66,18 @@ router.post('/', authorize('trade_group_owner','program_manager','intake_officer
        VALUES ($1, NULL, 'intake', $2, $3)`,
       [result.rows[0].client_id, req.user.sub || 'system', req.user.role]
     );
+    // AUTO-TRIGGER: intake-parser + ofac-screening
+    const _orch = require(require('path').join(__dirname, '../../agent-orchestrator'));
+    const _newClient = result.rows[0];
+    Promise.resolve().then(async () => {
+      const r1 = await _orch.runAgent('intake-parser', { client_data: _newClient, db: require('../services/db') });
+      console.log(JSON.stringify({ level: 'info', message: 'intake-parser done', status: r1.status }));
+      const r2 = await _orch.runAgent('ofac-screening', {
+        client_id: _newClient.client_id, full_name: _newClient.full_name,
+        country_of_origin: _newClient.country_of_origin, db: require('../services/db')
+      });
+      console.log(JSON.stringify({ level: 'info', message: 'ofac-screening done', status: r2.status }));
+    }).catch(err => console.error(JSON.stringify({ level: 'error', message: 'Auto-trigger error', error: err.message })));
 
     res.status(201).json(result.rows[0]);
   } catch (err) { next(err); }

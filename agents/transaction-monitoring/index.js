@@ -6,25 +6,24 @@ async function execute(context) {
   const anomalies = [];
 
   // Check for assets stuck in same stage > 30 days
-  const stuck = await db.clients.query(
+  const stuck = await db.assets.query(
     `SELECT a.asset_id, a.pipeline_reference, a.pipeline_stage,
-            a.last_transition, c.full_name as client_name
+            a.updated_at, a.client_id
      FROM pcm_assets a
-     JOIN pcm_clients c ON c.client_id = a.client_id
      WHERE a.pipeline_stage NOT IN ('completed','rejected')
-       AND a.last_transition < NOW() - INTERVAL '30 days'`
+       AND a.updated_at < NOW() - INTERVAL '30 days'`
   );
 
   for (const asset of stuck.rows) {
     const days_stuck = Math.floor(
-      (new Date() - new Date(asset.last_transition)) / (1000 * 60 * 60 * 24)
+      (new Date() - new Date(asset.updated_at)) / (1000 * 60 * 60 * 24)
     );
     anomalies.push({
       type:               'stuck_pipeline',
       asset_id:           asset.asset_id,
       pipeline_reference: asset.pipeline_reference,
       pipeline_stage:     asset.pipeline_stage,
-      client_name:        asset.client_name,
+      client_name:        asset.client_id,
       days_stuck,
       severity:           days_stuck > 60 ? 'critical' : 'warning',
       message:            `Asset ${asset.pipeline_reference} stuck in ${asset.pipeline_stage} for ${days_stuck} days`

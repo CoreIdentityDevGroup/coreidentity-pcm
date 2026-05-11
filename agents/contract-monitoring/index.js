@@ -14,7 +14,7 @@ async function execute(context) {
      FROM pcm_agreements a
      WHERE a.expiry_date IS NOT NULL
        AND a.expiry_date <= $1
-       AND a.status NOT IN ('expired','terminated')
+       AND a.status NOT IN ('expired')
      ORDER BY a.expiry_date ASC`,
     [in_90]
   );
