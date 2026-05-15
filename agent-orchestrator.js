@@ -59,15 +59,44 @@ async function runAgent(name, context) {
 
   try {
     const result = await agent.execute({ ...context, db });
+    const duration_ms = Date.now() - start;
     console.log(JSON.stringify({
       level: 'info',
       message: `Agent complete`,
       agent: name,
       status: result.status,
       action: result.action,
-      duration_ms: Date.now() - start,
+      duration_ms,
       timestamp: new Date().toISOString()
     }));
+
+    // Write to agent activity feed — non-blocking
+    db.clients.query(
+      `INSERT INTO pcm_agent_activity
+         (agent_name, agent_id, client_id, asset_id, action, status,
+          decision, proof_pack_id, duration_ms, result_summary, triggered_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+      [
+        name,
+        context.ais_agent_id || null,
+        context.client_id   || null,
+        context.asset_id    || null,
+        result.action       || null,
+        result.status       || null,
+        result.decision     || null,
+        context.proof_pack_id || null,
+        duration_ms,
+        JSON.stringify({
+          message: result.message,
+          flags:   result.flags,
+          confidence: result.confidence
+        }),
+        context.triggered_by || 'auto'
+      ]
+    ).catch(err => console.error(JSON.stringify({
+      level: 'error', message: 'Activity log failed', error: err.message
+    })));
+
     return result;
   } catch (err) {
     console.error(JSON.stringify({

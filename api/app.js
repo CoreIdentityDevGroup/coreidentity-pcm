@@ -31,6 +31,7 @@ const clientAuthRouter   = require('./routes/client-auth');
 const referrersRouter    = require('./routes/referrers');
 const leadsRouter        = require('./routes/leads');
 const agentsRouter       = require('./routes/agents');
+const activityRouter     = require('./routes/activity');
 
 const app  = express();
 const PORT = process.env.PORT || 3001;
@@ -78,7 +79,8 @@ app.use('/api/v1/referrers',    authenticate, referrersRouter);
 app.use('/api/v1/leads/public',       leadsRouter);
 app.use('/api/v1/leads/terms-acceptance', leadsRouter);
 app.use('/api/v1/leads',        authenticate, leadsRouter);
-app.use('/api/v1/agents',       authenticate, agentsRouter); // multipart/form-data
+app.use('/api/v1/agents',       authenticate, agentsRouter);
+app.use('/api/v1/activity',     authenticate, activityRouter); // multipart/form-data
 app.use('/api/v1/clients',  authenticate, clientsRouter);
 app.use('/api/v1/assets',   authenticate, assetsRouter);
 app.use('/api/v1/pehf',     authenticate, pehfRouter);
