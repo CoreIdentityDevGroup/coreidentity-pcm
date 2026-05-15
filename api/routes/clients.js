@@ -70,11 +70,11 @@ router.post('/', authorize('trade_group_owner','program_manager','intake_officer
     const _orch = require(require('path').join(__dirname, '../../agent-orchestrator'));
     const _newClient = result.rows[0];
     Promise.resolve().then(async () => {
-      const r1 = await _orch.runAgent('intake-parser', { client_data: _newClient, db: require('../services/db') });
+      const r1 = await _orch.runAgent('intake-parser', { client_id: _newClient.client_id, client_data: _newClient, db: require('../services/db'), triggered_by: 'auto' });
       console.log(JSON.stringify({ level: 'info', message: 'intake-parser done', status: r1.status }));
       const r2 = await _orch.runAgent('ofac-screening', {
         client_id: _newClient.client_id, full_name: _newClient.full_name,
-        country_of_origin: _newClient.country_of_origin, db: require('../services/db')
+        country_of_origin: _newClient.country_of_origin, db: require('../services/db'), triggered_by: 'auto'
       });
       console.log(JSON.stringify({ level: 'info', message: 'ofac-screening done', status: r2.status }));
     }).catch(err => console.error(JSON.stringify({ level: 'error', message: 'Auto-trigger error', error: err.message })));
@@ -233,6 +233,26 @@ router.post('/:id/pof', authorize('trade_group_owner','program_manager','intake_
       [req.params.id, declared_amount, currency || 'USD', issuing_bank,
        issuing_bank_swift, submission_date, gcs_bucket, gcs_object_path]
     );
+
+
+    // AUTO-TRIGGER: pof-verifier
+    const _pofOrch = require(require('path').join(__dirname, '../../agent-orchestrator'));
+    const _newPof = result.rows[0];
+    Promise.resolve().then(async () => {
+      const assets = await require('../services/db').assets.query(
+        'SELECT asset_id FROM pcm_assets WHERE client_id = $1 ORDER BY created_at DESC LIMIT 1',
+        [req.params.id]
+      );
+      if (assets.rows.length > 0) {
+        const r1 = await _pofOrch.runAgent('pof-verifier', {
+          client_id:   req.params.id,
+          asset_id:    assets.rows[0].asset_id,
+          db:          require('../services/db'),
+          triggered_by: 'auto'
+        });
+        console.log(JSON.stringify({ level:'info', message:'pof-verifier done', status: r1.status }));
+      }
+    }).catch(err => console.error(JSON.stringify({ level:'error', message:'POF auto-trigger error', error: err.message })));
 
     res.status(201).json(result.rows[0]);
   } catch (err) { next(err); }

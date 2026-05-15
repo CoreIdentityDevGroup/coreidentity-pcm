@@ -66,6 +66,33 @@ router.post('/', authorize('trade_group_owner','program_manager','intake_officer
        req.user.sub || 'system', req.user.role]
     );
 
+
+    // AUTO-TRIGGER: asset-classifier + bank-routing
+    const _assetOrch = require(require('path').join(__dirname, '../../agent-orchestrator'));
+    const _newAsset = result.rows[0];
+    Promise.resolve().then(async () => {
+      const r1 = await _assetOrch.runAgent('asset-classifier', {
+        client_id:      _newAsset.client_id,
+        asset_id:       _newAsset.asset_id,
+        description:    _newAsset.description,
+        asset_subtype:  _newAsset.asset_subtype,
+        declared_value: _newAsset.declared_value,
+        currency:       _newAsset.currency,
+        triggered_by:   'auto'
+      });
+      console.log(JSON.stringify({ level:'info', message:'asset-classifier done', status: r1.status }));
+      const r2 = await _assetOrch.runAgent('bank-routing', {
+        client_id:      _newAsset.client_id,
+        asset_id:       _newAsset.asset_id,
+        asset_type:     r1?.asset_type || _newAsset.asset_type,
+        declared_value: _newAsset.declared_value,
+        currency:       _newAsset.currency,
+        country_of_origin: _newAsset.location,
+        triggered_by:   'auto'
+      });
+      console.log(JSON.stringify({ level:'info', message:'bank-routing done', status: r2.status }));
+    }).catch(err => console.error(JSON.stringify({ level:'error', message:'Asset auto-trigger error', error: err.message })));
+
     res.status(201).json(result.rows[0]);
   } catch (err) { next(err); }
 });

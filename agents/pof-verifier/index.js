@@ -22,7 +22,7 @@ async function execute(context) {
   const pof = pof_result.rows[0];
 
   // Get asset declared value
-  const asset_result = await db.clients.query(
+  const asset_result = await db.assets.query(
     'SELECT declared_value, currency FROM pcm_assets WHERE asset_id = $1',
     [asset_id]
   );
