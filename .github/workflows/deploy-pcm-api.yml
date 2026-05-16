@@ -6,6 +6,7 @@ on:
   workflow_dispatch:
 
 env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   AWS_REGION: us-east-2
   ECR_REGISTRY: 636058550262.dkr.ecr.us-east-2.amazonaws.com
   ECR_REPOSITORY: coreidentity-api
@@ -183,11 +184,44 @@ jobs:
       - name: Wait for service stability
         run: |
           set -euo pipefail
-          aws ecs wait services-stable \
-            --cluster "$ECS_CLUSTER" \
-            --services "$ECS_SERVICE" \
-            --region "$AWS_REGION"
-          echo "PASS: service $ECS_SERVICE reached steady state"
+          python3 <<'PY'
+          import json, os, subprocess, sys, time
+
+          cluster  = os.environ["ECS_CLUSTER"]
+          service  = os.environ["ECS_SERVICE"]
+          region   = os.environ["AWS_REGION"]
+          MAX      = 90
+          INTERVAL = 10
+
+          start = time.time()
+          last  = None
+          for attempt in range(1, MAX + 1):
+              out = subprocess.check_output([
+                  "aws", "ecs", "describe-services",
+                  "--cluster", cluster, "--services", service,
+                  "--region", region, "--output", "json",
+              ])
+              last = json.loads(out)
+              svc = last["services"][0]
+              running = svc.get("runningCount", -1)
+              pending = svc.get("pendingCount", -1)
+              desired = svc.get("desiredCount", -1)
+              print(f"attempt {attempt}/{MAX} — running:{running} pending:{pending} desired:{desired}", flush=True)
+              if running == desired and pending == 0:
+                  elapsed = int(time.time() - start)
+                  print(f"STABLE after {attempt} attempts ({elapsed}s elapsed)")
+                  print(f"PASS: service {service} reached steady state")
+                  sys.exit(0)
+              if attempt < MAX:
+                  time.sleep(INTERVAL)
+
+          elapsed = int(time.time() - start)
+          print(f"TIMEOUT: service {service} did not stabilize after {MAX} attempts ({elapsed}s elapsed)", file=sys.stderr)
+          print("--- last describe-services output ---", file=sys.stderr)
+          print(json.dumps(last, indent=2, default=str), file=sys.stderr)
+          print(f"FAIL: service {service} did not reach steady state", file=sys.stderr)
+          sys.exit(1)
+          PY
 
       - name: Verify deployed task runs new image with secrets
         env:
