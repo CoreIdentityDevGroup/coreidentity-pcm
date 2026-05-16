@@ -18,10 +18,11 @@ RUN addgroup -g 1001 -S nodejs && adduser -S pcmapi -u 1001
 USER pcmapi
 
 COPY --chown=pcmapi:nodejs --from=deps /app/node_modules ./node_modules
-COPY --chown=pcmapi:nodejs api/         ./api/
-COPY --chown=pcmapi:nodejs agents/      ./agents/
-COPY --chown=pcmapi:nodejs scripts/     ./scripts/
-COPY --chown=pcmapi:nodejs package.json ./
+COPY --chown=pcmapi:nodejs api/                  ./api/
+COPY --chown=pcmapi:nodejs agents/               ./agents/
+COPY --chown=pcmapi:nodejs scripts/              ./scripts/
+COPY --chown=pcmapi:nodejs agent-orchestrator.js ./
+COPY --chown=pcmapi:nodejs package.json          ./
 
 EXPOSE 3001
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
