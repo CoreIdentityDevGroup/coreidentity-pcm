@@ -9,7 +9,7 @@ const router   = express.Router();
 router.get('/', async (req, res, next) => {
   try {
     const { asset_type, pipeline_stage, client_id, limit = 50, offset = 0 } = req.query;
-    let query = `SELECT * FROM pcm_assets WHERE 1=1`;
+    let query = `SELECT * FROM pcm_assets WHERE deleted_at IS NULL`;
     const params = [];
 
     if (asset_type)     { params.push(asset_type);     query += ` AND asset_type = $${params.length}`; }
@@ -29,7 +29,7 @@ router.get('/', async (req, res, next) => {
 router.get('/:id', async (req, res, next) => {
   try {
     const result = await db.assets.query(
-      `SELECT * FROM pcm_assets WHERE asset_id = $1`, [req.params.id]
+      `SELECT * FROM pcm_assets WHERE asset_id = $1 AND deleted_at IS NULL`, [req.params.id]
     );
     if (!result.rows.length) return res.status(404).json({ error: 'Asset not found' });
     res.json(result.rows[0]);
@@ -133,7 +133,7 @@ router.post('/:id/advance', authorize('trade_group_owner','program_manager','int
     if (!to_stage) return res.status(400).json({ error: 'to_stage is required' });
 
     const asset = await db.assets.query(
-      `SELECT * FROM pcm_assets WHERE asset_id = $1`, [req.params.id]
+      `SELECT * FROM pcm_assets WHERE asset_id = $1 AND deleted_at IS NULL`, [req.params.id]
     );
     if (!asset.rows.length) return res.status(404).json({ error: 'Asset not found' });
 
@@ -302,7 +302,7 @@ router.post('/:id/bank-assignment', authorize('trade_group_owner','program_manag
     }
 
     const asset = await db.assets.query(
-      `SELECT client_id FROM pcm_assets WHERE asset_id = $1`, [req.params.id]
+      `SELECT client_id FROM pcm_assets WHERE asset_id = $1 AND deleted_at IS NULL`, [req.params.id]
     );
     if (!asset.rows.length) return res.status(404).json({ error: 'Asset not found' });
 
