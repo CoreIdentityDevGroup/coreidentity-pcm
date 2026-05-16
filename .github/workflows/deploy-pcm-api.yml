@@ -1,0 +1,259 @@
+name: Deploy PCM API
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  AWS_REGION: us-east-2
+  ECR_REGISTRY: 636058550262.dkr.ecr.us-east-2.amazonaws.com
+  ECR_REPOSITORY: coreidentity-api
+  ECS_CLUSTER: coreidentity-dev
+  ECS_SERVICE: sentinel
+  TASK_FAMILY: coreidentity-dev-sentinel
+  REQUIRED_SECRETS: COREG_EMAIL,COREG_PASSWORD,COREG_API_URL
+  HEALTH_URL: https://api.coregenisis.com/health
+
+jobs:
+  deploy:
+    name: Build, push, deploy, verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push Docker image
+        id: build
+        run: |
+          set -euo pipefail
+          IMAGE_URI="${ECR_REGISTRY}/${ECR_REPOSITORY}:${GITHUB_SHA}"
+          echo "Building $IMAGE_URI"
+          docker build -t "$IMAGE_URI" .
+          echo "Pushing $IMAGE_URI"
+          docker push "$IMAGE_URI"
+          echo "image_uri=$IMAGE_URI" >> "$GITHUB_OUTPUT"
+          echo "PASS: image built and pushed -> $IMAGE_URI"
+
+      - name: Register new task definition (preserve secrets)
+        id: register
+        env:
+          IMAGE_URI: ${{ steps.build.outputs.image_uri }}
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import json, os, subprocess, sys
+
+          family   = os.environ["TASK_FAMILY"]
+          region   = os.environ["AWS_REGION"]
+          image    = os.environ["IMAGE_URI"]
+          required = [s.strip() for s in os.environ["REQUIRED_SECRETS"].split(",") if s.strip()]
+
+          desc = subprocess.check_output(
+              ["aws", "ecs", "describe-task-definition",
+               "--task-definition", family, "--region", region, "--output", "json"]
+          )
+          td = json.loads(desc)["taskDefinition"]
+
+          if not td.get("containerDefinitions"):
+              print("FAIL: current task definition has no containerDefinitions", file=sys.stderr)
+              sys.exit(1)
+
+          old_image = td["containerDefinitions"][0].get("image")
+          old_secrets = td["containerDefinitions"][0].get("secrets") or []
+          old_names = {s["name"] for s in old_secrets}
+
+          missing = [n for n in required if n not in old_names]
+          if missing:
+              print(f"FAIL: current task def is missing required secrets: {missing}", file=sys.stderr)
+              sys.exit(1)
+
+          td["containerDefinitions"][0]["image"] = image
+
+          allowed = {
+              "family", "taskRoleArn", "executionRoleArn", "networkMode",
+              "containerDefinitions", "volumes", "placementConstraints",
+              "requiresCompatibilities", "cpu", "memory", "runtimePlatform",
+              "ephemeralStorage", "pidMode", "ipcMode", "proxyConfiguration",
+              "inferenceAccelerators",
+          }
+          payload = {k: v for k, v in td.items() if k in allowed and v is not None}
+
+          with open("/tmp/td-new.json", "w") as f:
+              json.dump(payload, f)
+
+          out = subprocess.check_output(
+              ["aws", "ecs", "register-task-definition",
+               "--region", region, "--cli-input-json", "file:///tmp/td-new.json",
+               "--output", "json"]
+          )
+          new_td = json.loads(out)["taskDefinition"]
+          new_arn = new_td["taskDefinitionArn"]
+          new_rev = new_td["revision"]
+
+          new_secrets = new_td["containerDefinitions"][0].get("secrets") or []
+          new_names = {s["name"] for s in new_secrets}
+          if not set(required).issubset(new_names):
+              print(f"FAIL: registered task def lost required secrets. have={sorted(new_names)} required={required}", file=sys.stderr)
+              sys.exit(1)
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as gh:
+              gh.write(f"task_def_arn={new_arn}\n")
+              gh.write(f"task_def_revision={new_rev}\n")
+
+          print(f"PASS: registered {family}:{new_rev}")
+          print(f"      old image -> {old_image}")
+          print(f"      new image -> {image}")
+          print(f"      preserved secrets -> {sorted(new_names)}")
+          PY
+
+      - name: Guard - verify required secrets present and not in plaintext env
+        env:
+          TASK_DEF_ARN: ${{ steps.register.outputs.task_def_arn }}
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import json, os, subprocess, sys
+
+          arn      = os.environ["TASK_DEF_ARN"]
+          region   = os.environ["AWS_REGION"]
+          required = [s.strip() for s in os.environ["REQUIRED_SECRETS"].split(",") if s.strip()]
+
+          desc = subprocess.check_output(
+              ["aws", "ecs", "describe-task-definition",
+               "--task-definition", arn, "--region", region, "--output", "json"]
+          )
+          td = json.loads(desc)["taskDefinition"]
+          c = td["containerDefinitions"][0]
+
+          secrets = c.get("secrets") or []
+          env     = c.get("environment") or []
+          secret_names = {s["name"] for s in secrets}
+          env_names    = {e["name"] for e in env}
+
+          fails = []
+          for name in required:
+              if name not in secret_names:
+                  fails.append(f"{name} missing from secrets[]")
+              if name in env_names:
+                  fails.append(f"{name} present in plaintext environment[] - REJECT")
+              for s in secrets:
+                  if s["name"] == name and not s.get("valueFrom", "").startswith("arn:aws:"):
+                      fails.append(f"{name} valueFrom is not a Secrets Manager / SSM ARN")
+
+          if fails:
+              print("FAIL: secrets guard rejected this task definition:", file=sys.stderr)
+              for f in fails:
+                  print(f"  - {f}", file=sys.stderr)
+              sys.exit(1)
+
+          print(f"PASS: all required secrets are valueFrom ARNs and absent from environment[]")
+          for s in secrets:
+              if s["name"] in required:
+                  print(f"      {s['name']} -> {s['valueFrom']}")
+          PY
+
+      - name: Update ECS service
+        env:
+          TASK_DEF_ARN: ${{ steps.register.outputs.task_def_arn }}
+        run: |
+          set -euo pipefail
+          aws ecs update-service \
+            --cluster "$ECS_CLUSTER" \
+            --service "$ECS_SERVICE" \
+            --task-definition "$TASK_DEF_ARN" \
+            --region "$AWS_REGION" \
+            --output json > /tmp/update.json
+          echo "PASS: service $ECS_SERVICE updated to $TASK_DEF_ARN"
+
+      - name: Wait for service stability
+        run: |
+          set -euo pipefail
+          aws ecs wait services-stable \
+            --cluster "$ECS_CLUSTER" \
+            --services "$ECS_SERVICE" \
+            --region "$AWS_REGION"
+          echo "PASS: service $ECS_SERVICE reached steady state"
+
+      - name: Verify deployed task runs new image with secrets
+        env:
+          IMAGE_URI: ${{ steps.build.outputs.image_uri }}
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import json, os, subprocess, sys
+
+          cluster  = os.environ["ECS_CLUSTER"]
+          service  = os.environ["ECS_SERVICE"]
+          region   = os.environ["AWS_REGION"]
+          expected = os.environ["IMAGE_URI"]
+          required = [s.strip() for s in os.environ["REQUIRED_SECRETS"].split(",") if s.strip()]
+
+          tasks = json.loads(subprocess.check_output([
+              "aws", "ecs", "list-tasks",
+              "--cluster", cluster, "--service-name", service,
+              "--desired-status", "RUNNING", "--region", region, "--output", "json"
+          ]))["taskArns"]
+          if not tasks:
+              print("FAIL: no RUNNING tasks for service", file=sys.stderr)
+              sys.exit(1)
+
+          desc = json.loads(subprocess.check_output([
+              "aws", "ecs", "describe-tasks",
+              "--cluster", cluster, "--tasks", *tasks, "--region", region, "--output", "json"
+          ]))["tasks"]
+
+          all_pass = True
+          for t in desc:
+              img = t["containers"][0].get("image", "")
+              tdarn = t["taskDefinitionArn"]
+              ok_img = (img == expected)
+              tdesc = json.loads(subprocess.check_output([
+                  "aws", "ecs", "describe-task-definition",
+                  "--task-definition", tdarn, "--region", region, "--output", "json"
+              ]))["taskDefinition"]
+              secret_names = {s["name"] for s in (tdesc["containerDefinitions"][0].get("secrets") or [])}
+              ok_secrets = set(required).issubset(secret_names)
+              status = "PASS" if (ok_img and ok_secrets) else "FAIL"
+              print(f"{status}: task {t['taskArn'].split('/')[-1]} image={img} secrets={sorted(secret_names)}")
+              if not (ok_img and ok_secrets):
+                  all_pass = False
+
+          if not all_pass:
+              sys.exit(1)
+          print("PASS: all running tasks on new image with required secrets")
+          PY
+
+      - name: Post-deploy health check
+        run: |
+          set -euo pipefail
+          attempt=0
+          max=10
+          while [ $attempt -lt $max ]; do
+            attempt=$((attempt + 1))
+            code=$(curl -s -o /tmp/health.body -w "%{http_code}" --max-time 10 "$HEALTH_URL" || echo "000")
+            echo "attempt $attempt: HTTP $code"
+            if [ "$code" = "200" ]; then
+              echo "PASS: $HEALTH_URL returned 200"
+              cat /tmp/health.body || true
+              exit 0
+            fi
+            sleep 6
+          done
+          echo "FAIL: $HEALTH_URL did not return 200 after $max attempts"
+          cat /tmp/health.body || true
+          exit 1
