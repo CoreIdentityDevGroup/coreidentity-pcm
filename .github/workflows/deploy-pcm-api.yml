@@ -206,8 +206,16 @@ jobs:
               running = svc.get("runningCount", -1)
               pending = svc.get("pendingCount", -1)
               desired = svc.get("desiredCount", -1)
-              print(f"attempt {attempt}/{MAX} — running:{running} pending:{pending} desired:{desired}", flush=True)
-              if running == desired and pending == 0:
+              deployments = svc.get("deployments", [])
+              rollout = deployments[0].get("rolloutState") if deployments else None
+              print(f"attempt {attempt}/{MAX} — running:{running} pending:{pending} desired:{desired} deployments:{len(deployments)} rolloutState:{rollout}", flush=True)
+              stable = (
+                  running == desired
+                  and pending == 0
+                  and len(deployments) == 1
+                  and rollout == "COMPLETED"
+              )
+              if stable:
                   elapsed = int(time.time() - start)
                   print(f"STABLE after {attempt} attempts ({elapsed}s elapsed)")
                   print(f"PASS: service {service} reached steady state")
