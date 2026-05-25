@@ -9,12 +9,15 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   AWS_REGION: us-east-2
   ECR_REGISTRY: 636058550262.dkr.ecr.us-east-2.amazonaws.com
-  ECR_REPOSITORY: coreidentity-api
-  ECS_CLUSTER: coreidentity-dev
-  ECS_SERVICE: sentinel
-  TASK_FAMILY: coreidentity-dev-sentinel
-  REQUIRED_SECRETS: COREG_EMAIL,COREG_PASSWORD,COREG_API_URL
-  HEALTH_URL: https://api.coregenisis.com/health
+  ECR_REPOSITORY: pcm-api
+  ECS_CLUSTER: coreidentity-prod
+  ECS_SERVICE: pcm-api
+  TASK_FAMILY: coreidentity-prod-pcm-api
+  # PCM API carries DB creds + JWT_SECRET as task-def environment[]; it does not
+  # use the COREG_* Secrets Manager entries (those belong to the dashboard CoreG
+  # card on the sentinel service). No required secrets[] to enforce here.
+  REQUIRED_SECRETS: ""
+  HEALTH_URL: https://api.coregenisis.com/api/v1/health
 
 jobs:
   deploy:
@@ -84,6 +87,15 @@ jobs:
               sys.exit(1)
 
           td["containerDefinitions"][0]["image"] = image
+
+          # Fix 4 — ensure AIS_API_URL is present in environment[] (idempotent)
+          envs = td["containerDefinitions"][0].get("environment") or []
+          if not any(e.get("name") == "AIS_API_URL" for e in envs):
+              envs.append({"name": "AIS_API_URL", "value": "https://api.agentidentity.systems"})
+              print("      added AIS_API_URL=https://api.agentidentity.systems")
+          else:
+              print("      AIS_API_URL already present")
+          td["containerDefinitions"][0]["environment"] = envs
 
           allowed = {
               "family", "taskRoleArn", "executionRoleArn", "networkMode",

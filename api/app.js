@@ -71,6 +71,7 @@ app.use(morgan('combined'));
 // ─── ROUTES ───────────────────────────────────────────────────────────────────
 app.get('/ping', (_req, res) => res.json({ ok: true }));
 app.use('/health',    healthRouter);
+app.get('/api/v1/health', healthRouter.coregHealth); // no auth — liveness probe
 app.use('/api/v1/auth',     authRouter);
 app.use('/api/v1/upload',   authenticate, uploadRouter);
 app.use('/api/v1/download',     authenticate, downloadRouter);

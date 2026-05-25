@@ -30,4 +30,16 @@ router.get('/', async (_req, res) => {
   });
 });
 
+
+// GET /api/v1/health — lightweight liveness probe (no auth, no DB dependency)
+function coregHealth(_req, res) {
+  res.status(200).json({
+    status:    'ok',
+    service:   'coreg-pcm-api',
+    timestamp: new Date().toISOString(),
+    uptime:    process.uptime()
+  });
+}
+router.coregHealth = coregHealth;
+
 module.exports = router;

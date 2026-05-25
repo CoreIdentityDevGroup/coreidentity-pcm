@@ -13,6 +13,35 @@ const {
 } = require('../services/pipeline');
 const router = express.Router();
 
+// ─── GET PIPELINE SUMMARY (count by status + recent entries) ──────────────────
+// GET /api/v1/pipeline  — mounted with authenticate in app.js   /* fix-pipeline-summary */
+router.get('/', async (_req, res, next) => {
+  try {
+    const db = require('../services/db');
+    const byStatus = await db.clients.query(
+      `SELECT to_stage AS status, COUNT(*)::int AS count
+         FROM pcm_client_pipeline_audit
+        GROUP BY to_stage
+        ORDER BY count DESC`
+    );
+    const recent = await db.clients.query(
+      `SELECT client_id, from_stage, to_stage, transitioned_by,
+              transition_role, reason, notes, created_at
+         FROM pcm_client_pipeline_audit
+        ORDER BY created_at DESC
+        LIMIT 20`
+    );
+    const total = byStatus.rows.reduce((sum, r) => sum + Number(r.count), 0);
+    res.json({
+      total,
+      by_status: byStatus.rows,
+      recent:    recent.rows,
+      generated_at: new Date().toISOString()
+    });
+  } catch (err) { next(err); }
+});
+
+
 // ─── GET STAGE DEFINITIONS ────────────────────────────────────────────────────
 router.get('/stages', (_req, res) => {
   res.json({ stages: STAGES });
