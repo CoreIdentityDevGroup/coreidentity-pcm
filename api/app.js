@@ -32,11 +32,6 @@ const referrersRouter    = require('./routes/referrers');
 const leadsRouter        = require('./routes/leads');
 const agentsRouter       = require('./routes/agents');
 const activityRouter     = require('./routes/activity');
-const referenceRouter        = require('./routes/reference');
-const transactionsRouter     = require('./routes/transactions');
-const transactionStagesRouter = require('./routes/transaction-stages');
-const documentsRouter        = require('./routes/documents');
-const rulesRouter            = require('./routes/rules');
 
 const app  = express();
 const PORT = process.env.PORT || 3001;
@@ -92,12 +87,6 @@ app.use('/api/v1/assets',   authenticate, assetsRouter);
 app.use('/api/v1/pehf',     authenticate, pehfRouter);
 app.use('/api/v1/forms',    authenticate, formsRouter);
 app.use('/api/v1/pipeline', authenticate, pipelineRouter);
-// ─── PHASE 2: COREG PORTAL EXPANSION ──────────────────────────────────────────
-app.use('/api/v1/reference',     authenticate, referenceRouter);
-app.use('/api/v1/transactions',  authenticate, transactionsRouter);
-app.use('/api/v1/transactions',  authenticate, transactionStagesRouter); // /:txId/stages/:stageNumber
-app.use('/api/v1/documents',     authenticate, documentsRouter);
-app.use('/api/v1/rules',         authenticate, rulesRouter);
 
 // ─── 404 ─────────────────────────────────────────────────────────────────────
 app.use((_req, res) => {
