@@ -1,0 +1,42 @@
+{
+  "agent_id": "pcm-instrument-integrity",
+  "name": "Instrument & Counterparty Integrity Agent",
+  "vertical": "private_capital_markets",
+  "version": "1.0.0",
+  "trigger": "post_intake_parse",
+  "pipeline_stage": "appraisal_review",
+  "description": "v1 (financial instruments module): validates SWIFT MT structural fields, ISIN/CUSIP checksums, and scores submissions against a fraud-typology library. Never auto-sets 'verified' — requires independent-channel human confirmation. Hard-blocks on high fraud-risk score or structural validation failure.",
+  "ais_required": true,
+  "sal_logging": "full",
+  "human_gate_required": true,
+  "reversible_actions_only": true,
+  "runtime": "node",
+  "note_runtime": "Deterministic checksum/regex validation, not an LLM call — no model dependency, no external inference runtime.",
+  "max_tokens": null,
+  "timeout_seconds": 30,
+  "retry_policy": {
+    "max_attempts": 2,
+    "backoff_seconds": 3
+  },
+  "inputs": ["asset_id", "client_id", "description", "instrument_type", "isin", "cusip", "swift_mt_type", "swift_raw_message"],
+  "outputs": ["status", "action", "instrument_integrity_status", "fraud_risk_score", "matched_patterns", "structural_validation"],
+  "sal_event_types": [
+    "agent_started",
+    "agent_completed",
+    "agent_failed",
+    "decision_logged",
+    "flag_raised",
+    "hard_block_issued"
+  ],
+  "governance": {
+    "sentinel_enforced": true,
+    "policy_set": "pcm-default",
+    "pq_signing": "ML-DSA-65"
+  },
+  "open_items": [
+    "Human-review confirmation endpoint (sets 'verified' after independent-channel counterparty check) not yet built — this agent can only reach 'blocked' or 'pending_human_verification'",
+    "Typology library v1.0.0 seeded from demonstrated failure case, not yet cross-validated against FBI IC3 / FinCEN advisory datasets",
+    "SWIFT structural validation is field-presence only (v1) — full ISO 15022 grammar parsing is a v1.1 hardening item",
+    "Scoring thresholds (block_threshold: 50, review_threshold: 20) are unvalidated starting values — require calibration against real transaction history"
+  ]
+}

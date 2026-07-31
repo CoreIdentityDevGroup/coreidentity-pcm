@@ -27,13 +27,10 @@ async function execute(context) {
     }
   }
 
-  // Value-based classification hints
+  // CLOSE-GAP-01: value-based auto-classification removed.
+  // Declared value alone must never route a submission to PROCEED.
+  // Unmatched submissions always require manual classification.
   const value = parseFloat(declared_value || 0);
-  if (!best_match && value > 0) {
-    if (value >= 50_000_000) best_match = 'sblc';
-    else if (value >= 1_000_000) best_match = 'precious_metals';
-    else best_match = 'real_estate';
-  }
 
   return {
     status:         'classified',
@@ -41,7 +38,7 @@ async function execute(context) {
     confidence:     best_score > 2 ? 'high' : best_score > 0 ? 'medium' : 'low',
     declared_value: value,
     currency:       currency || 'USD',
-    action:         best_match ? 'PROCEED' : 'REQUEST_MANUAL_CLASSIFICATION',
+    action:         best_match ? 'PROCEED' : 'REQUEST_MANUAL_CLASSIFICATION', // CLOSE-GAP-01: no value-based override
     message:        `Classified as ${best_match || 'unclassified'} (confidence: ${best_score > 2 ? 'high' : best_score > 0 ? 'medium' : 'low'})`
   };
 }

@@ -24,6 +24,7 @@ const REQUIRED_AGENTS = [
   'deletion-certification',
   'contract-monitoring',
   'transaction-monitoring',
+  'instrument-integrity', // CLOSE-GAP-03
 ];
 
 const REQUIRED_FILES = ['index.js', 'manifest.json'];

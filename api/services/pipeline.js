@@ -48,10 +48,23 @@ const GATE_REQUIREMENTS = {
       `SELECT COUNT(*) FROM pcm_asset_documents
        WHERE asset_id = $1 AND vault_status = 'active'`, [asset_id]
     );
+    // CLOSE-GAP-02b: instrument authenticity/fraud-typology gate.
+    // Blocks progression until the instrument-integrity agent has cleared
+    // this asset. 'pending' (default) and 'blocked' both fail the gate —
+    // only 'verified' (set exclusively via human-confirmed independent-channel
+    // review, never by the agent alone) passes.
+    const integrity = await db.assets.query(
+      `SELECT instrument_integrity_status FROM pcm_assets WHERE asset_id = $1`, [asset_id]
+    );
     const errors = [];
     if (parseInt(val.rows[0].count) === 0) errors.push('No valuation or appraisal submitted');
     if (val.rows[0].val_status === 'failed') errors.push('Same-date validation failed — document dates do not match');
     if (parseInt(docs.rows[0].count) === 0) errors.push('No supporting documents on file');
+    const integrityStatus = integrity.rows[0]?.instrument_integrity_status;
+    if (integrityStatus === 'blocked') errors.push('Instrument integrity screening BLOCKED this asset — see pcm_instrument_integrity_results');
+    if (integrityStatus === 'pending' || integrityStatus === 'pending_human_verification' || !integrityStatus) {
+      errors.push('Instrument integrity screening not yet cleared — independent-channel counterparty verification required');
+    }
     return errors;
   },
 

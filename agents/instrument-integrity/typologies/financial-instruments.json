@@ -1,0 +1,63 @@
+{
+  "typology_version": "1.0.0",
+  "asset_class": "financial_instruments",
+  "last_updated": "2026-07-31",
+  "source_basis": "Demonstrated live failure case (UniCredit Bank Germany EUR29B MTN offer, flagged 2026-07-31); documented prime-bank-instrument / advance-fee fraud patterns (FBI IC3, FinCEN advisories — full dataset sourcing is a v1.1 open item, see spec section 7)",
+  "note": "Scores are additive per submission. This is a starting weighting, not a final calibration — thresholds must be validated against real transaction history before enforcement is tuned (see spec section 7, scoring thresholds open item).",
+
+  "patterns": [
+    {
+      "id": "non_negotiable_ltv_fee",
+      "description": "LTV or fee terms explicitly stated as non-negotiable, especially paired with a high LTV (>=85%)",
+      "regex": "non[\\s-]?negotiable",
+      "weight": 25
+    },
+    {
+      "id": "instant_monetization_claim",
+      "description": "Claims of monetizing/leasing a sovereign, bank, or corporate bond via a private intermediary outside normal capital markets issuance",
+      "regex": "(monetiz|lease)(e|ing|ation)?\\s+(the\\s+)?(bond|instrument|mtn|sblc|bg)",
+      "weight": 30
+    },
+    {
+      "id": "rushed_authorization_bundle",
+      "description": "DOA (Declaration of Authorization), BCL (Bank Comfort/Confirmation Letter), and CIS bundled together with urgency language ahead of a call/meeting to finalize",
+      "regex": "(DOA|declaration of authorization).{0,80}(BCL|bank comfort|bank confirmation).{0,80}(CIS|client information sheet)",
+      "weight": 25
+    },
+    {
+      "id": "video_call_finalization",
+      "description": "Unverified video-call finalization step ('G-Meet', 'Zoom call to finalize') substituting for verified institutional contact",
+      "regex": "(g-?meet|zoom call|video call)\\s+(will be |to )?(arrange|finaliz|discuss)",
+      "weight": 15
+    },
+    {
+      "id": "advance_fee_language",
+      "description": "Upfront commission, processing fee, or due-diligence fee required before verified counterparty contact",
+      "regex": "(commission|processing fee|due diligence fee).{0,40}(non[\\s-]?refundable|upfront|in advance)",
+      "weight": 25
+    },
+    {
+      "id": "unsolicited_bond_creation",
+      "description": "Bond or MTN described as created/issued on demand to match a specific private transaction's face value — real sovereign/bank bonds are not issued this way",
+      "regex": "(bond|mtn)\\s+(will be |to be )?(created|issued)\\s+(to match|for)",
+      "weight": 30
+    },
+    {
+      "id": "cds_terminology_in_bond_doc",
+      "description": "Credit default swap terminology appearing inside a bond purchase confirmation or MTN offer — does not belong in this document type",
+      "regex": "CDS\\s*(Repl\\.?\\s*Spread|repl\\.?spread)",
+      "weight": 20
+    },
+    {
+      "id": "unrecognized_corporate_action",
+      "description": "Corporate action notice referencing an action type with no real-world equivalent",
+      "regex": "option right exercised",
+      "weight": 15
+    }
+  ],
+
+  "block_threshold": 50,
+  "review_threshold": 20,
+
+  "note_on_thresholds": "score >= block_threshold => hard block, no auto-clear. score >= review_threshold and < block_threshold => mandatory human review. score < review_threshold does NOT mean 'verified' — independent-channel counterparty verification is still required per spec section 3.3 before instrument_integrity_status can be set to 'verified'."
+}
