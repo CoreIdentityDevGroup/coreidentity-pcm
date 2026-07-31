@@ -147,6 +147,73 @@ router.post('/reject', authorize('trade_group_owner'), async (req, res, next) =>
   } catch (err) { next(err); }
 });
 
+// ─── VERIFY INSTRUMENT INTEGRITY (human-review confirmation) ─────────────────
+// CLOSE-GAP-04: the ONLY path permitted to set instrument_integrity_status
+// to 'verified'. The instrument-integrity agent cannot self-clear this status.
+router.post('/verify-instrument', authorize('program_manager','trade_group_owner'), async (req, res, next) => {
+  try {
+    const { asset_id, client_id, decision, verification_channel_note } = req.body;
+
+    if (!asset_id || !client_id) {
+      return res.status(400).json({ error: 'asset_id and client_id required' });
+    }
+    if (!['verified', 'blocked'].includes(decision)) {
+      return res.status(400).json({ error: "decision must be 'verified' or 'blocked'" });
+    }
+    if (!verification_channel_note || !verification_channel_note.trim()) {
+      return res.status(400).json({
+        error: 'verification_channel_note required — document how this was independently confirmed (or why it is being blocked). Contact info from the submitted documents must NOT be used for verification.'
+      });
+    }
+
+    const db = require('../services/db');
+    const governance = require('../services/governance');
+
+    const current = await db.assets.query(
+      `SELECT instrument_integrity_status FROM pcm_assets WHERE asset_id = $1`,
+      [asset_id]
+    );
+    if (!current.rows.length) {
+      return res.status(404).json({ error: 'Asset not found' });
+    }
+    if (current.rows[0].instrument_integrity_status === 'verified') {
+      return res.status(409).json({ error: 'Asset already verified — no action taken' });
+    }
+
+    const reviewedBy = req.user?.sub || req.user?.email || 'unknown_reviewer';
+
+    await db.assets.query(
+      `UPDATE pcm_assets SET instrument_integrity_status = $1 WHERE asset_id = $2`,
+      [decision, asset_id]
+    );
+
+    await db.assets.query(
+      `UPDATE pcm_instrument_integrity_results
+         SET reviewed_by = $1, reviewed_at = NOW(), verification_channel_note = $2, status = $3
+       WHERE id = (
+         SELECT id FROM pcm_instrument_integrity_results
+         WHERE asset_id = $4 ORDER BY created_at DESC LIMIT 1
+       )`,
+      [reviewedBy, verification_channel_note, decision, asset_id]
+    );
+
+    await governance.salLog({
+      agent_id: reviewedBy,
+      action:   `INSTRUMENT_INTEGRITY_REVIEW.${decision.toUpperCase()}`,
+      resource: `pcm:asset:${asset_id}`,
+      decision: decision === 'verified' ? 'ALLOW' : 'BLOCK',
+      context:  { asset_id, client_id, reviewed_by: reviewedBy, verification_channel_note }
+    });
+
+    res.json({
+      success: true,
+      asset_id,
+      instrument_integrity_status: decision,
+      reviewed_by: reviewedBy
+    });
+  } catch (err) { next(err); }
+});
+
 // ─── HOLD ASSET ───────────────────────────────────────────────────────────────
 router.post('/hold', authorize('trade_group_owner','program_manager'), async (req, res, next) => {
   try {
