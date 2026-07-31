@@ -1,8 +1,14 @@
 name: Deploy PCM API
 
 on:
-  push:
-    branches: [main]
+  # DISABLED-UNTIL-REBUILD (2026-07-31): coreidentity-prod ECS cluster does
+  # not exist (AWS brought to $0 spend 2026-07-04 — see REBUILD.md in
+  # coreidentity-infrastructure). Auto-deploy on push was failing every run
+  # at "Update ECS service" (ClusterNotFoundException), producing false
+  # Failure badges that risk masking a real future failure. Re-enable the
+  # push trigger below as part of the actual rebuild sequence, not before.
+  # push:
+  #   branches: [main]
   workflow_dispatch:
 
 env:
