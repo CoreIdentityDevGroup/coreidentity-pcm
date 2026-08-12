@@ -1,18 +1,14 @@
 #!/usr/bin/env node
 /**
- * SEED: founder/owner staff account for pcm_staff.
+ * SEED: pcm_staff account (email, name, role, password).
  *
- * Fixes a gap in the "invisible to repo" pattern (see coreidentity-infrastructure
- * REBUILD.md, "Config Drift Invisible to Terraform"): the founder's pcm_staff
- * login row previously existed only as a hand-run INSERT with no trace in any
- * repo, so it came back empty when pcm_clients was restored from a schema-only
- * dump after the 2026-08-11 rebuild. This script is the reproducible substitute.
- *
- * Role: trade_group_owner — the highest tier in api/middleware/authorize.js's
- * ROLE_HIERARCHY (3, vs program_manager=2, intake_officer=1/system=0) and the
- * only role listed on every authorize() call in the API, including the
- * endpoints scoped to it alone (client deletion, pipeline rejection,
- * reference-data and rules management).
+ * General-purpose successor to the original founder-only seed script (see
+ * git history — this file was seed-founder-staff.js). Same rationale: fixes
+ * the "invisible to repo" gap where staff login rows previously existed
+ * only as hand-run INSERTs with no trace anywhere (see
+ * coreidentity-infrastructure REBUILD.md, "Config Drift Invisible to
+ * Terraform"). Any new staff account — founder or otherwise — should be
+ * created by running this script, not a manual INSERT.
  *
  * Idempotent: ON CONFLICT (email) DO NOTHING — re-running this script never
  * overwrites a password that's since been changed through the app.
@@ -23,9 +19,12 @@
  * Required env vars:
  *   PCM_DB_CLIENT_HOST, PCM_DB_CLIENT_NAME, PCM_DB_CLIENT_USER,
  *   PCM_DB_CLIENT_PASSWORD, PCM_DB_CLIENT_PORT
- *   FOUNDER_EMAIL, FOUNDER_NAME, FOUNDER_PASSWORD
+ *   STAFF_EMAIL, STAFF_NAME, STAFF_ROLE, STAFF_PASSWORD
  *
- * Run: node scripts/seed-founder-staff.js
+ * STAFF_ROLE must be one of the values pcm_staff_role_check allows:
+ *   trade_group_owner, program_manager, intake_officer
+ *
+ * Run: node scripts/seed-staff.js
  */
 
 'use strict';
@@ -45,19 +44,26 @@ const pool = new Pool({
   ssl:      sslConfig
 });
 
-const ROLE = 'trade_group_owner';
+// Mirrors the pcm_staff_role_check constraint in the schema.
+const ALLOWED_ROLES = ['trade_group_owner', 'program_manager', 'intake_officer'];
 
 async function main() {
-  const email = process.env.FOUNDER_EMAIL;
-  const name = process.env.FOUNDER_NAME;
-  const password = process.env.FOUNDER_PASSWORD;
+  const email = process.env.STAFF_EMAIL;
+  const name = process.env.STAFF_NAME;
+  const role = process.env.STAFF_ROLE;
+  const password = process.env.STAFF_PASSWORD;
 
-  if (!email || !name || !password) {
-    console.error('✗ FOUNDER_EMAIL, FOUNDER_NAME, and FOUNDER_PASSWORD must all be set.');
+  if (!email || !name || !role || !password) {
+    console.error('✗ STAFF_EMAIL, STAFF_NAME, STAFF_ROLE, and STAFF_PASSWORD must all be set.');
     process.exit(1);
   }
 
-  console.log('SEED: founder staff account');
+  if (!ALLOWED_ROLES.includes(role)) {
+    console.error(`✗ STAFF_ROLE must be one of: ${ALLOWED_ROLES.join(', ')} (got "${role}")`);
+    process.exit(1);
+  }
+
+  console.log(`SEED: staff account (${role})`);
   try {
     await pool.query('CREATE EXTENSION IF NOT EXISTS pgcrypto');
 
@@ -66,11 +72,11 @@ async function main() {
        VALUES ($1, $2, $3, crypt($4, gen_salt('bf', 12)), true)
        ON CONFLICT (email) DO NOTHING
        RETURNING staff_id`,
-      [email, name, ROLE, password]
+      [email, name, role, password]
     );
 
     if (result.rows.length) {
-      console.log(`  ✓ Created ${email} as ${ROLE} (staff_id ${result.rows[0].staff_id})`);
+      console.log(`  ✓ Created ${email} as ${role} (staff_id ${result.rows[0].staff_id})`);
     } else {
       console.log(`  = ${email} already exists — left untouched (idempotent, not overwriting an existing password).`);
     }
