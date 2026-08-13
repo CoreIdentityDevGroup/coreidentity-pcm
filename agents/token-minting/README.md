@@ -7,7 +7,7 @@
 
 ## Description
 
-Mints cryptographically signed classification certificate upon trade completion. ID and verification only — no transferable right.
+Mints a classification certificate upon trade completion. Certificate is not cryptographically signed — no PQ signing backend is implemented. ID and verification only — no transferable right.
 
 ## Governance
 
@@ -15,8 +15,7 @@ Mints cryptographically signed classification certificate upon trade completion.
 |---------|-------|
 | AIS Identity | Required |
 | SAL Logging | Full |
-| Sentinel | Enforced |
-| PQ Signing | ML-DSA-65 |
+| PQ Signing | UNSIGNED-NO-PQ-BACKEND-V1 |
 | Human Gate | Per pipeline stage |
 | Reversible Actions | Yes — no irreversible actions without human gate |
 

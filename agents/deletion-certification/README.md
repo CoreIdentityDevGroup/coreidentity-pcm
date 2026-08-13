@@ -15,8 +15,7 @@ Executes automated deletion of sensitive vault contents at trade closure. Genera
 |---------|-------|
 | AIS Identity | Required |
 | SAL Logging | Full |
-| Sentinel | Enforced |
-| PQ Signing | ML-DSA-65 |
+| PQ Signing | UNSIGNED-NO-PQ-BACKEND-V1 |
 | Human Gate | Per pipeline stage |
 | Reversible Actions | Yes — no irreversible actions without human gate |
 

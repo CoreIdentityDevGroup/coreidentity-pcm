@@ -15,8 +15,7 @@ Cross-checks all submitted document dates against each other. Enforces same-date
 |---------|-------|
 | AIS Identity | Required |
 | SAL Logging | Full |
-| Sentinel | Enforced |
-| PQ Signing | ML-DSA-65 |
+| PQ Signing | UNSIGNED-NO-PQ-BACKEND-V1 |
 | Human Gate | Per pipeline stage |
 | Reversible Actions | Yes — no irreversible actions without human gate |
 

@@ -15,8 +15,7 @@ Monitors fund deployment at Stage 6. Tracks disbursement, flags anomalies, and l
 |---------|-------|
 | AIS Identity | Required |
 | SAL Logging | Full |
-| Sentinel | Enforced |
-| PQ Signing | ML-DSA-65 |
+| PQ Signing | UNSIGNED-NO-PQ-BACKEND-V1 |
 | Human Gate | Per pipeline stage |
 | Reversible Actions | Yes — no irreversible actions without human gate |
 

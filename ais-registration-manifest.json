@@ -12,9 +12,9 @@
       "trigger": "new_intake_submission",
       "pipeline_stage": "intake",
       "governance": {
-        "sentinel_enforced": true,
+        "sentinel_enforced": false,
         "sal_logging": "full",
-        "pq_signing": "ML-DSA-65"
+        "pq_signing": "UNSIGNED-NO-PQ-BACKEND-V1"
       }
     },{
       "agent_id": "pcm-asset-classifier",
@@ -23,9 +23,9 @@
       "trigger": "post_intake_parse",
       "pipeline_stage": "intake",
       "governance": {
-        "sentinel_enforced": true,
+        "sentinel_enforced": false,
         "sal_logging": "full",
-        "pq_signing": "ML-DSA-65"
+        "pq_signing": "UNSIGNED-NO-PQ-BACKEND-V1"
       }
     },{
       "agent_id": "pcm-document-date-validator",
@@ -34,9 +34,9 @@
       "trigger": "document_upload",
       "pipeline_stage": "appraisal_review",
       "governance": {
-        "sentinel_enforced": true,
+        "sentinel_enforced": false,
         "sal_logging": "full",
-        "pq_signing": "ML-DSA-65"
+        "pq_signing": "UNSIGNED-NO-PQ-BACKEND-V1"
       }
     },{
       "agent_id": "pcm-pof-verifier",
@@ -45,9 +45,9 @@
       "trigger": "stage_2_gate",
       "pipeline_stage": "kyc_verification",
       "governance": {
-        "sentinel_enforced": true,
+        "sentinel_enforced": false,
         "sal_logging": "full",
-        "pq_signing": "ML-DSA-65"
+        "pq_signing": "UNSIGNED-NO-PQ-BACKEND-V1"
       }
     },{
       "agent_id": "pcm-ofac-screening",
@@ -56,9 +56,9 @@
       "trigger": "stage_2_gate",
       "pipeline_stage": "kyc_verification",
       "governance": {
-        "sentinel_enforced": true,
+        "sentinel_enforced": false,
         "sal_logging": "full",
-        "pq_signing": "ML-DSA-65"
+        "pq_signing": "UNSIGNED-NO-PQ-BACKEND-V1"
       }
     },{
       "agent_id": "pcm-valuation-parser",
@@ -67,9 +67,9 @@
       "trigger": "stage_3_gate",
       "pipeline_stage": "appraisal_review",
       "governance": {
-        "sentinel_enforced": true,
+        "sentinel_enforced": false,
         "sal_logging": "full",
-        "pq_signing": "ML-DSA-65"
+        "pq_signing": "UNSIGNED-NO-PQ-BACKEND-V1"
       }
     },{
       "agent_id": "pcm-bank-routing",
@@ -78,9 +78,9 @@
       "trigger": "stage_4_gate",
       "pipeline_stage": "bank_assignment",
       "governance": {
-        "sentinel_enforced": true,
+        "sentinel_enforced": false,
         "sal_logging": "full",
-        "pq_signing": "ML-DSA-65"
+        "pq_signing": "UNSIGNED-NO-PQ-BACKEND-V1"
       }
     },{
       "agent_id": "pcm-token-minting",
@@ -89,9 +89,9 @@
       "trigger": "stage_8_trade_close",
       "pipeline_stage": "tokenization",
       "governance": {
-        "sentinel_enforced": true,
+        "sentinel_enforced": false,
         "sal_logging": "full",
-        "pq_signing": "ML-DSA-65"
+        "pq_signing": "UNSIGNED-NO-PQ-BACKEND-V1"
       }
     },{
       "agent_id": "pcm-deletion-certification",
@@ -100,9 +100,9 @@
       "trigger": "trade_closure_event",
       "pipeline_stage": "completed",
       "governance": {
-        "sentinel_enforced": true,
+        "sentinel_enforced": false,
         "sal_logging": "full",
-        "pq_signing": "ML-DSA-65"
+        "pq_signing": "UNSIGNED-NO-PQ-BACKEND-V1"
       }
     },{
       "agent_id": "pcm-contract-monitoring",
@@ -111,9 +111,9 @@
       "trigger": "continuous",
       "pipeline_stage": "all_stages",
       "governance": {
-        "sentinel_enforced": true,
+        "sentinel_enforced": false,
         "sal_logging": "full",
-        "pq_signing": "ML-DSA-65"
+        "pq_signing": "UNSIGNED-NO-PQ-BACKEND-V1"
       }
     },{
       "agent_id": "pcm-transaction-monitoring",
@@ -122,9 +122,9 @@
       "trigger": "stage_6_gate",
       "pipeline_stage": "monetization",
       "governance": {
-        "sentinel_enforced": true,
+        "sentinel_enforced": false,
         "sal_logging": "full",
-        "pq_signing": "ML-DSA-65"
+        "pq_signing": "UNSIGNED-NO-PQ-BACKEND-V1"
       }
     }]
 }

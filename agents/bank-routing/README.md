@@ -15,8 +15,7 @@ Recommends appropriate trader bank based on client geography, asset type, and tr
 |---------|-------|
 | AIS Identity | Required |
 | SAL Logging | Full |
-| Sentinel | Enforced |
-| PQ Signing | ML-DSA-65 |
+| PQ Signing | UNSIGNED-NO-PQ-BACKEND-V1 |
 | Human Gate | Per pipeline stage |
 | Reversible Actions | Yes — no irreversible actions without human gate |
 

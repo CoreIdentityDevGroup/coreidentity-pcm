@@ -28,8 +28,8 @@
     "flag_raised"
   ],
   "governance": {
-    "sentinel_enforced": true,
+    "sentinel_enforced": false,
     "policy_set": "pcm-default",
-    "pq_signing": "ML-DSA-65"
+    "pq_signing": "UNSIGNED-NO-PQ-BACKEND-V1"
   }
 }

@@ -29,9 +29,9 @@
     "hard_block_issued"
   ],
   "governance": {
-    "sentinel_enforced": true,
+    "sentinel_enforced": false,
     "policy_set": "pcm-default",
-    "pq_signing": "ML-DSA-65"
+    "pq_signing": "UNSIGNED-NO-PQ-BACKEND-V1"
   },
   "open_items": [
     "Human-review confirmation endpoint (sets 'verified' after independent-channel counterparty check) not yet built — this agent can only reach 'blocked' or 'pending_human_verification'",
