@@ -9,8 +9,8 @@ async function execute(context) {
 
   // Find expiring agreements
   const expiring = await db.forms.query(
-    `SELECT a.agreement_id, a.agreement_type, a.expiry_date, 
-            a.pipeline_reference, a.status
+    `SELECT a.agreement_id, a.agreement_type, a.expiry_date,
+            a.pipeline_reference, a.status, a.asset_id, a.client_id
      FROM pcm_agreements a
      WHERE a.expiry_date IS NOT NULL
        AND a.expiry_date <= $1
@@ -42,18 +42,24 @@ async function execute(context) {
         : `Agreement expiring in ${days_until} days: ${agreement.agreement_type}`
     });
 
-    // Log alert
+    // Log alert. CLOSE-GAP-22: corrected table name (see script header),
+    // correct required columns (asset_id/client_id are NOT NULL live),
+    // and event_type mapped to the live CHECK constraint's allowed values
+    // using the same days_until <= 0 condition already computed above
+    // for severity.
     await db.forms.query(
-      `INSERT INTO pcm_monitoring_log
-         (agreement_id, alert_type, severity, message, pipeline_reference)
-       VALUES ($1, $2, $3, $4, $5)
-       ON CONFLICT DO NOTHING`,
+      `INSERT INTO pcm_contract_monitoring_log
+         (agreement_id, asset_id, client_id, pipeline_reference, event_type, severity, message, agent_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
       [
         agreement.agreement_id,
-        'expiry_warning',
+        agreement.asset_id,
+        agreement.client_id,
+        agreement.pipeline_reference,
+        days_until <= 0 ? 'expired' : 'approaching_expiry',
         severity,
         alerts[alerts.length - 1].message,
-        agreement.pipeline_reference
+        'contract-monitoring-agent'
       ]
     );
   }
