@@ -8,17 +8,24 @@
  * (where available) the live database on every run — it does not just
  * print a frozen answer key.
  *
- * Ships in WARN mode (VALIDATE_AGENTS_ENFORCE unset or != 'true'): failures
- * print but do not exit non-zero, so this is safe to wire into `npm run
- * build` immediately. Phase 6.2 flips VALIDATE_AGENTS_ENFORCE=true once the
- * findings below are closed.
+ * Phase 6.2: ENFORCE is now the default. All findings live at the time
+ * this flipped were either fixed for real (CLOSE-GAP-31's appraisal_review
+ * allowlist rewrite) or reclassified from fail to warn with a documented
+ * reason (token-minting/deletion-certification's confirmed-dead state --
+ * a permanent, reviewed Phase 3.3 decision, not an outstanding defect;
+ * see check2_1's comments). Set VALIDATE_AGENTS_ENFORCE=false to drop
+ * back to WARN mode for local iteration -- default WARN behavior no
+ * longer ships silently.
  *
- * Five checks, run in order:
+ * Eight checks, run in order:
  *   2.1 Manifest truth        — declared trigger vs. traced real call site
  *   2.2 Gate-bound column guard — derived from GATE_REQUIREMENTS itself
  *   2.3 Declared property reachability — sentinel_enforced, pq_signing
  *   2.4 Schema truth          — every referenced table/column exists live
  *   2.5 Deployment drift      — running image SHA vs. git HEAD (advisory)
+ *   2.6 Manifest external-source truth — claimed vs. actual external calls
+ *   2.7 Gate allowlist/blocklist pattern
+ *   2.8 State-machine adjacency (CLOSE-GAP-30 regression guard)
  */
 
 'use strict';
@@ -33,7 +40,7 @@ const ROUTES_DIR    = path.join(REPO_ROOT, 'api', 'routes');
 const ORCH_FILE      = path.join(REPO_ROOT, 'agent-orchestrator.js');
 const SERVICES_PIPELINE_FILE = path.join(REPO_ROOT, 'api', 'services', 'pipeline.js');
 
-const ENFORCE = process.env.VALIDATE_AGENTS_ENFORCE === 'true';
+const ENFORCE = process.env.VALIDATE_AGENTS_ENFORCE !== 'false';
 
 const REQUIRED_AGENTS = [
   'intake-parser', 'asset-classifier', 'document-date-validator',
@@ -156,10 +163,21 @@ function check2_1() {
       // anywhere in the route/orchestrator source at all. Re-verify the
       // weaker claim that's still checkable: the manifest carries its
       // superseded marker (i.e. this wasn't silently reverted).
+      //
+      // WARN, not FAIL (Phase 6.2): this is a deliberate, reviewed,
+      // permanent decision (Phase 3.3/CLOSE-GAP-23), not an outstanding
+      // defect -- token-minting's real implementation is
+      // pipeline.js's triggerTokenization(), and re-wiring this module
+      // would not satisfy the completed-stage gate even if done, since
+      // it never sets pcm_assets.token_id. A build that can never go
+      // green again for an intentionally-retired module defeats the
+      // purpose of enforce mode; the marker-integrity check below still
+      // catches a real regression (someone silently reverting the
+      // superseded state) at fail severity.
       if (manifest.description.startsWith(trace.manifestMarker)) {
-        record('2.1', 'fail', `${agent}: NO REACHABLE CALL SITE. ${trace.realSite}. Manifest trigger '${manifest.trigger}' is asserted but nothing invokes this agent.`);
+        record('2.1', 'warn', `${agent}: confirmed dead as designed (Phase 3.3) — ${trace.realSite}. Manifest trigger '${manifest.trigger}' remains asserted but is understood to be historical, not a live claim.`);
       } else {
-        record('2.1', 'warn', `${agent}: manifest superseded-marker missing or changed — re-verify this agent is still actually dead, not just re-flagged`);
+        record('2.1', 'fail', `${agent}: manifest superseded-marker missing or changed — re-verify this agent is still actually dead, not just re-flagged`);
       }
       continue;
     }
@@ -179,9 +197,19 @@ function check2_1() {
       const allSourceText = routeFiles.map(r => r.text).join('\n') + orchText;
       const callers = countFunctionCallers(allSourceText, '_unwiredStageAdvanceTriggers');
       if (callers > 0) {
-        record('2.1', 'warn', `${agent}: previously dead call site (_unwiredStageAdvanceTriggers) now has ${callers} caller(s) — re-investigate, this may have been wired up since the trace was recorded`);
+        // A real regression signal (something re-wired a call site this
+        // agent depends on) -- kept at fail severity.
+        record('2.1', 'fail', `${agent}: previously dead call site (_unwiredStageAdvanceTriggers) now has ${callers} caller(s) — re-investigate, this may have been wired up since the trace was recorded`);
       } else {
-        record('2.1', 'fail', `${agent}: NO REACHABLE CALL SITE. ${trace.realSite}. Manifest trigger '${manifest.trigger}' is asserted but nothing invokes this agent.`);
+        // WARN, not FAIL (Phase 6.2): deletion-certification staying
+        // unreachable is a deliberate, reviewed decision (Phase 3.3/
+        // CLOSE-GAP-24) -- wiring it as-is would generate a false
+        // compliance certificate (no DELETE statement exists anywhere in
+        // it), not close a gap. Real deletion logic is an out-of-scope
+        // product/legal decision, not assumed here. The caller-count
+        // check above still catches an actual regression at fail
+        // severity if this ever gets silently re-wired.
+        record('2.1', 'warn', `${agent}: confirmed dead as designed (Phase 3.3) — ${trace.realSite}. Manifest trigger '${manifest.trigger}' remains asserted but is understood to be historical, not a live claim.`);
       }
       continue;
     }

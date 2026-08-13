@@ -36,6 +36,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Validate agents (Phase 6.2 — enforce mode, real CI gate)
+        # No PCM_DB_*_HOST secrets injected here -- 2.4's live schema-truth
+        # check degrades to a skipped warning without DB access (by
+        # design, see check2_4), not a failure. Everything else runs
+        # against source only and enforces for real: a real deploy now
+        # blocks on a real validator failure, not just a build script
+        # nobody was required to run.
+        run: npm run build
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:

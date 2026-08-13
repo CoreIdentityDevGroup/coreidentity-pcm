@@ -115,14 +115,36 @@ const GATE_REQUIREMENTS = {
     const integrity = await db.assets.query(
       `SELECT instrument_integrity_status FROM pcm_assets WHERE asset_id = $1`, [asset_id]
     );
+    // CLOSE-GAP-31: allowlist, not blocklist (Phase 2 validator 2.7).
+    // val_status previously only blocked on the literal 'failed' --
+    // 'manual_override' (a real enum value, confirmed live: pending,
+    // passed, failed, manual_override) had zero references anywhere in
+    // this codebase before this fix, so nothing establishes what it's
+    // supposed to mean or how it gets set. Not assuming it deserves a
+    // pass -- mirrors the exact allowlist bank_assignment/tokenization
+    // already use for this same column: only 'passed' satisfies the
+    // gate, everything else (including any future enum value) blocks by
+    // default. Same reasoning for instrument_integrity_status: 'verified'
+    // is the one human-confirmed-good state (CLOSE-GAP-04's
+    // /verify-instrument is the only path that sets it); everything else
+    // blocks.
     const errors = [];
     if (parseInt(val.rows[0].count) === 0) errors.push('No valuation or appraisal submitted');
-    if (val.rows[0].val_status === 'failed') errors.push('Same-date validation failed — document dates do not match');
+    // Gating condition is the allowlist (!== 'passed'); the specific bad
+    // value is only used to pick a more informative message, not to
+    // decide pass/fail -- an unrecognized future value still blocks and
+    // still gets a real (if generic) message, never silently passes.
+    if (val.rows[0].val_status !== 'passed') {
+      errors.push(val.rows[0].val_status === 'failed'
+        ? 'Same-date validation failed — document dates do not match'
+        : 'Same-date validation not passed — document dates do not match, or validation has not completed');
+    }
     if (parseInt(docs.rows[0].count) === 0) errors.push('No supporting documents on file');
     const integrityStatus = integrity.rows[0]?.instrument_integrity_status;
-    if (integrityStatus === 'blocked') errors.push('Instrument integrity screening BLOCKED this asset — see pcm_instrument_integrity_results');
-    if (integrityStatus === 'pending' || integrityStatus === 'pending_human_verification' || !integrityStatus) {
-      errors.push('Instrument integrity screening not yet cleared — independent-channel counterparty verification required');
+    if (integrityStatus !== 'verified') {
+      errors.push(integrityStatus === 'blocked'
+        ? 'Instrument integrity screening BLOCKED this asset — see pcm_instrument_integrity_results'
+        : 'Instrument integrity screening not yet cleared — independent-channel counterparty verification required');
     }
     return errors;
   },
