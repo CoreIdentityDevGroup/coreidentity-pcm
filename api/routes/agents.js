@@ -52,7 +52,8 @@ router.post('/run', authorize('trade_group_owner'), async (req, res) => {
 
 // POST /api/v1/agents/monitoring
 // Runs contract + transaction monitoring cycle
-router.post('/monitoring', async (req, res) => {
+// CLOSE-GAP-20: previously had no authorize() at all.
+router.post('/monitoring', authorize('trade_group_owner'), async (req, res) => {
   try {
     const results = await runMonitoringCycle();
     res.json({ status: 'complete', results });
