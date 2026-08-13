@@ -121,21 +121,78 @@ const GATE_REQUIREMENTS = {
     const errors = [];
     if (parseInt(icc.rows[0].count) === 0) errors.push('ICC Agreement not fully executed');
     return errors;
+  },
+
+  // CLOSE-GAP-12-C2: previously no entry existed for 'tokenization' — absence
+  // meant validateGate() returned [] (pass) and checkRoleAuthority()
+  // auto-authorized any caller. Condition reused from the existing
+  // bank_assignment checker's pattern: a valuation with
+  // date_validation_status = 'passed' must exist. This is not a new rule —
+  // triggerTokenization() already requires exactly this and silently
+  // no-ops without it; this makes that existing requirement an explicit,
+  // enforced gate instead of a silent skip.
+  tokenization: async (asset_id, client_id) => {
+    const val = await db.assets.query(
+      `SELECT date_validation_status FROM pcm_valuations
+       WHERE asset_id = $1 ORDER BY created_at DESC LIMIT 1`, [asset_id]
+    );
+    const errors = [];
+    if (!val.rows.length) errors.push('No valuation on file');
+    if (val.rows[0]?.date_validation_status !== 'passed') errors.push('Valuation date validation not passed');
+    return errors;
+  },
+
+  // CLOSE-GAP-12-C2: previously no entry existed for 'completed' — same gap as
+  // tokenization above. Condition reused from the existing
+  // collateralization checker's pattern (an asset column must be set):
+  // pcm_assets.token_id must be populated, which triggerTokenization() sets
+  // only when a classification token was actually minted.
+  completed: async (asset_id, client_id) => {
+    const asset = await db.assets.query(
+      `SELECT token_id FROM pcm_assets WHERE asset_id = $1`, [asset_id]
+    );
+    const errors = [];
+    if (!asset.rows[0]?.token_id) errors.push('No classification token minted for this asset');
+    return errors;
   }
 };
 
 // ─── VALIDATE GATE ────────────────────────────────────────────────────────────
 async function validateGate(to_stage, asset_id, client_id) {
   const checker = GATE_REQUIREMENTS[to_stage];
-  if (!checker) return [];
+  if (!checker) {
+    // CLOSE-GAP-12-C1: absence of a gate requirement is never a pass. A stage
+    // with no entry here must block, not silently succeed.
+    throw new Error(`No gate definition exists for stage '${to_stage}' — refusing to advance. Absence of a gate requirement is never a pass.`);
+  }
   return await checker(asset_id, client_id);
 }
 
 // ─── CHECK ROLE AUTHORITY ─────────────────────────────────────────────────────
-function checkRoleAuthority(to_stage, user_role) {
+// CLOSE-GAP-12-C3: gate_role === 'system' no longer auto-authorizes. It means
+// the system's own gate check (GATE_REQUIREMENTS[to_stage], evaluated by
+// the caller and passed in as systemCheck) must have run and recorded a
+// pass. No recorded result — systemCheck missing or not evaluated — blocks,
+// same as a failed one. Human-role hierarchy logic below is unchanged.
+function checkRoleAuthority(to_stage, user_role, systemCheck) {
   const stage = STAGES[to_stage];
   if (!stage) return { authorized: false, reason: `Unknown stage: ${to_stage}` };
-  if (stage.gate_role === 'system') return { authorized: true };
+
+  if (stage.gate_role === 'system') {
+    if (!systemCheck || systemCheck.evaluated !== true) {
+      return {
+        authorized: false,
+        reason: `Stage '${to_stage}' is system-gated and requires a recorded system check result before authorization; none was provided.`
+      };
+    }
+    if (!systemCheck.passed) {
+      return {
+        authorized: false,
+        reason: `Stage '${to_stage}' is system-gated and the recorded system check did not pass.`
+      };
+    }
+    return { authorized: true };
+  }
 
   const hierarchy = { trade_group_owner: 3, program_manager: 2, intake_officer: 1, system: 0 };
   const required  = hierarchy[stage.gate_role] || 0;
@@ -151,17 +208,48 @@ function checkRoleAuthority(to_stage, user_role) {
 }
 
 // ─── ADVANCE PIPELINE ─────────────────────────────────────────────────────────
+// CLOSE-GAP-12-C4: fail-closed on the whole path. The gate is evaluated first,
+// inside a try/catch — any error or timeout (including the "no gate
+// definition" throw from validateGate()) blocks immediately with
+// block_reason 'blocked_error'. A gate that ran cleanly but found unmet
+// conditions blocks with block_reason 'blocked_pending'. No branch here
+// logs and continues past a failure. For system-gated stages, this same
+// evaluation becomes the recorded systemCheck result checkRoleAuthority()
+// requires — evaluated once, not queried twice.
 async function advancePipeline({ asset_id, client_id, to_stage, user, notes }) {
-  // 1. Role authority check
-  const auth = checkRoleAuthority(to_stage, user.role);
+  const stage = STAGES[to_stage];
+  if (!stage) {
+    return { success: false, code: 400, error: `Unknown stage: ${to_stage}`, block_reason: 'blocked_error' };
+  }
+
+  let systemCheck;
+  if (stage.gate_role === 'system') {
+    try {
+      const errors = await validateGate(to_stage, asset_id, client_id);
+      systemCheck = { evaluated: true, passed: errors.length === 0, errors };
+    } catch (err) {
+      return { success: false, code: 422, error: err.message, block_reason: 'blocked_error' };
+    }
+  }
+
+  // 1. Role authority check (unchanged for human-gated stages)
+  const auth = checkRoleAuthority(to_stage, user.role, systemCheck);
   if (!auth.authorized) {
-    return { success: false, code: 403, error: auth.reason };
+    return {
+      success: false, code: 403, error: auth.reason,
+      block_reason: (systemCheck && !systemCheck.passed) ? 'blocked_pending' : undefined
+    };
   }
 
   // 2. Gate requirements check
-  const gateErrors = await validateGate(to_stage, asset_id, client_id);
+  let gateErrors;
+  try {
+    gateErrors = systemCheck ? systemCheck.errors : await validateGate(to_stage, asset_id, client_id);
+  } catch (err) {
+    return { success: false, code: 422, error: err.message, block_reason: 'blocked_error' };
+  }
   if (gateErrors.length > 0) {
-    return { success: false, code: 422, error: 'Gate requirements not met', gate_errors: gateErrors };
+    return { success: false, code: 422, error: 'Gate requirements not met', block_reason: 'blocked_pending', gate_errors: gateErrors };
   }
 
   // 3. Get current stages
