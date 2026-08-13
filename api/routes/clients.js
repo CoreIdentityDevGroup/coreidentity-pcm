@@ -116,35 +116,21 @@ router.patch('/:id', authorize('trade_group_owner','program_manager','intake_off
 });
 
 // ─── ADVANCE PIPELINE STAGE ───────────────────────────────────────────────────
-router.post('/:id/advance', authorize('trade_group_owner','program_manager','intake_officer'), async (req, res, next) => {
-  try {
-    const { to_stage, reason, notes } = req.body;
-    if (!to_stage) return res.status(400).json({ error: 'to_stage is required' });
-
-    const client = await db.clients.query(
-      `SELECT * FROM pcm_clients WHERE client_id = $1 AND deleted_at IS NULL`,
-      [req.params.id]
-    );
-    if (!client.rows.length) return res.status(404).json({ error: 'Client not found' });
-
-    const from_stage = client.rows[0].pipeline_stage;
-
-    const result = await db.clients.query(
-      `UPDATE pcm_clients SET pipeline_stage = $1
-       WHERE client_id = $2 RETURNING *`,
-      [to_stage, req.params.id]
-    );
-
-    await db.clients.query(
-      `INSERT INTO pcm_client_pipeline_audit
-        (client_id, from_stage, to_stage, transitioned_by, transition_role, reason, notes)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-      [req.params.id, from_stage, to_stage,
-       req.user.sub || 'system', req.user.role, reason, notes]
-    );
-
-    res.json({ client: result.rows[0], transition: { from: from_stage, to: to_stage } });
-  } catch (err) { next(err); }
+// ─── ADVANCE CLIENT PIPELINE STAGE — REMOVED (CLOSE-GAP-17) ──────────────────
+// This route used to update pcm_clients.pipeline_stage directly, with no
+// role-hierarchy check, no GATE_REQUIREMENTS check, and no sentinelCheck()
+// call -- the same defect CLOSE-GAP-11 fixed on the assets side. Not
+// routed through advancePipeline(): that function requires asset_id,
+// which this route never accepted, and there is no standalone concept of
+// advancing a client's stage independent of an asset in the guarded
+// model. Route kept (not deleted) so a caller gets 410 Gone instead of a
+// 404 that could pass for a typo.
+router.post('/:id/advance', authorize('trade_group_owner','program_manager','intake_officer'), (req, res) => {
+  res.status(410).json({
+    error:       'Gone',
+    message:     'This endpoint no longer advances pipeline stage. It performed no role-hierarchy, gate, or Sentinel checks, and never accepted the asset_id the guarded path requires. Use POST /api/v1/pipeline/advance instead.',
+    use_instead: '/api/v1/pipeline/advance'
+  });
 });
 
 // ─── GET CLIENT PIPELINE AUDIT ────────────────────────────────────────────────
