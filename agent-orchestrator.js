@@ -163,23 +163,15 @@ async function runMonitoringCycle() {
   return results;
 }
 
-// contract-monitoring ("continuous") and transaction-monitoring ("stage_6_gate")
-// have no discrete route event to hook — they poll state instead. Without this,
-// runMonitoringCycle is only reachable via the manual POST /api/v1/agents/monitoring
-// endpoint and never fires on its own.
-let _monitoringTimer = null;
-function startMonitoringSchedule(intervalMs = parseInt(process.env.PCM_MONITORING_INTERVAL_MS || '900000', 10)) {
-  if (_monitoringTimer) return _monitoringTimer;
-  _monitoringTimer = setInterval(() => {
-    runMonitoringCycle().catch(err => console.error(JSON.stringify({
-      level: 'error', message: 'Scheduled monitoring cycle failed', error: err.message
-    })));
-  }, intervalMs);
-  _monitoringTimer.unref();
-  console.log(JSON.stringify({
-    level: 'info', message: 'Monitoring cycle schedule started', interval_ms: intervalMs
-  }));
-  return _monitoringTimer;
-}
+// CLOSE-GAP-29 (Phase 3.6): the setInterval scheduler that used to live
+// here was rejected in Phase 3.1 review and never wired up -- its state
+// lived entirely in-process and reset on every deploy, making the
+// "recurring" cadence unreliable even at a single replica. Replaced by
+// an external scheduler calling POST /api/v1/scheduled/monitoring (see
+// api/routes/scheduled.js): idempotency-key guarded, and its success
+// emits a real CloudWatch metric a staleness alarm can watch for --
+// contract-monitoring and transaction-monitoring have no discrete route
+// event to hook, they poll state instead, so silence here must be
+// detectable as unhealthy, not indistinguishable from "nothing to do."
 
-module.exports = { runAgent, runMonitoringCycle, startMonitoringSchedule };
+module.exports = { runAgent, runMonitoringCycle };

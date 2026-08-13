@@ -37,6 +37,7 @@ const transactionsRouter     = require('./routes/transactions');
 const transactionStagesRouter = require('./routes/transaction-stages');
 const documentsRouter        = require('./routes/documents');
 const rulesRouter            = require('./routes/rules');
+const scheduledRouter    = require('./routes/scheduled'); // CLOSE-GAP-29: external-scheduler monitoring target
 
 const app  = express();
 const PORT = process.env.PORT || 3001;
@@ -98,6 +99,10 @@ app.use('/api/v1/transactions',  authenticate, transactionsRouter);
 app.use('/api/v1/transactions',  authenticate, transactionStagesRouter); // /:txId/stages/:stageNumber
 app.use('/api/v1/documents',     authenticate, documentsRouter);
 app.use('/api/v1/rules',         authenticate, rulesRouter);
+// CLOSE-GAP-29 (Phase 3.6): no `authenticate` (JWT) here -- this is a
+// machine target for an external scheduler, gated by its own
+// X-Scheduler-Api-Key check inside the router instead.
+app.use('/api/v1/scheduled',     scheduledRouter);
 
 // ─── 404 ─────────────────────────────────────────────────────────────────────
 app.use((_req, res) => {

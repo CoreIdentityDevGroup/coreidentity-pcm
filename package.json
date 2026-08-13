@@ -14,6 +14,7 @@
     "test": "jest --forceExit"
   },
   "dependencies": {
+    "@aws-sdk/client-cloudwatch": "^3.967.0",
     "@google-cloud/secret-manager": "^5.0.1",
     "@google-cloud/storage": "^7.19.0",
     "cors": "^2.8.5",
