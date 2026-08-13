@@ -126,36 +126,58 @@ router.patch('/:id', authorize('trade_group_owner','program_manager','intake_off
   } catch (err) { next(err); }
 });
 
-// ─── ADVANCE ASSET PIPELINE STAGE ─────────────────────────────────────────────
-router.post('/:id/advance', authorize('trade_group_owner','program_manager','intake_officer'), async (req, res, next) => {
-  try {
-    const { to_stage, notes } = req.body;
-    if (!to_stage) return res.status(400).json({ error: 'to_stage is required' });
-
-    const asset = await db.assets.query(
-      `SELECT * FROM pcm_assets WHERE asset_id = $1 AND deleted_at IS NULL`, [req.params.id]
-    );
-    if (!asset.rows.length) return res.status(404).json({ error: 'Asset not found' });
-
-    const from_stage = asset.rows[0].pipeline_stage;
-
-    const result = await db.assets.query(
-      `UPDATE pcm_assets SET pipeline_stage = $1
-       WHERE asset_id = $2 RETURNING *`,
-      [to_stage, req.params.id]
-    );
-
-    await db.assets.query(
-      `INSERT INTO pcm_pipeline_history
-        (asset_id, client_id, from_stage, to_stage, transitioned_by, transition_role, notes)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-      [req.params.id, asset.rows[0].client_id,
-       from_stage, to_stage, req.user.sub || 'system', req.user.role, notes]
-    );
-
-    res.json({ asset: result.rows[0], transition: { from: from_stage, to: to_stage } });
-  } catch (err) { next(err); }
+// ─── ADVANCE ASSET PIPELINE STAGE — REMOVED (CLOSE-GAP-11) ───────────────────
+// This route used to update pcm_assets.pipeline_stage directly, with no
+// role-authority check, no GATE_REQUIREMENTS check, and no sentinelCheck()
+// call — a second, unguarded path to the same transition that
+// POST /api/v1/pipeline/advance already gates. Route kept (not deleted) so
+// a caller gets 410 Gone instead of a 404 that could pass for a typo.
+router.post('/:id/advance', authorize('trade_group_owner','program_manager','intake_officer'), (req, res) => {
+  res.status(410).json({
+    error:       'Gone',
+    message:     'This endpoint no longer advances pipeline stage. It performed no role-authority, gate, or Sentinel checks. Use POST /api/v1/pipeline/advance instead.',
+    use_instead: '/api/v1/pipeline/advance'
+  });
 });
+
+// TODO(gap-12): token-minting / deletion-certification triggers, unwired.
+// Moved off POST /:id/advance by CLOSE-GAP-11
+// (scripts/close-gap-11-remove-unguarded-advance.js) rather than deleted.
+// Not called from anywhere in this file or elsewhere in the repo.
+// Phase 0 Q10 has not settled whether stage_8_trade_close refers to a
+// transaction-stage or an asset-stage event; re-wiring this against the
+// wrong object is exactly the mistake CLOSE-GAP-11 exists to unwind. Do not
+// call this function until Q10 is resolved and the correct call site is
+// chosen deliberately — not restored to its old location by default.
+async function _unwiredStageAdvanceTriggers(assetId, asset, to_stage) {
+  const _stageOrch = require(require('path').join(__dirname, '../../agent-orchestrator'));
+
+  if (to_stage === 'tokenization') {
+    const val = await db.assets.query(
+      `SELECT appraised_value FROM pcm_valuations
+       WHERE asset_id = $1 ORDER BY created_at DESC LIMIT 1`,
+      [assetId]
+    );
+    const r = await _stageOrch.runAgent('token-minting', {
+      asset_id:           assetId,
+      client_id:          asset.client_id,
+      pipeline_reference: asset.pipeline_reference,
+      appraised_value:    val.rows[0]?.appraised_value || asset.declared_value,
+      currency:           asset.currency,
+      bank_assignment:    asset.bank_assignment,
+      triggered_by:       'auto'
+    });
+    console.log(JSON.stringify({ level:'info', message:'token-minting done', status: r.status }));
+  } else if (to_stage === 'completed') {
+    const r = await _stageOrch.runAgent('deletion-certification', {
+      asset_id:           assetId,
+      client_id:          asset.client_id,
+      pipeline_reference: asset.pipeline_reference,
+      triggered_by:       'auto'
+    });
+    console.log(JSON.stringify({ level:'info', message:'deletion-certification done', status: r.status }));
+  }
+}
 
 // ─── GET PIPELINE HISTORY ─────────────────────────────────────────────────────
 router.get('/:id/history', async (req, res, next) => {
