@@ -5,7 +5,7 @@
   "version": "1.0.0",
   "trigger": "stage_2_gate",
   "pipeline_stage": "kyc_verification",
-  "description": "Runs client name, entity, and banking partner against OFAC/sanctions watchlists via third-party API. Logs result to audit trail.",
+  "description": "Heuristic pre-screen only -- matches client name/country against a hardcoded list (10 countries, 4 regex patterns compiled into source). Does NOT call any external OFAC/SDN API or watchlist. A match is real signal (status: flagged); no match does NOT mean a real sanctions screen cleared this client (status: not_authoritatively_screened). Logs result to audit trail.",
   "ais_required": true,
   "sal_logging": "full",
   "human_gate_required": false,

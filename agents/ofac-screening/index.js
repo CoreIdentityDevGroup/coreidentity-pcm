@@ -30,7 +30,14 @@ async function execute(context) {
     }
   });
 
-  const status = flags.length > 0 ? 'flagged' : 'clear';
+  // CLOSE-GAP-25: this agent has never called an external sanctions API --
+  // it is a hardcoded heuristic (10 country strings, 4 regex patterns).
+  // A match is still real signal ('flagged'), but "no match" is NOT the
+  // same claim as "screened clean against the real SDN list" -- calling
+  // it 'clear' let the kyc_verification gate treat an unauthoritative
+  // heuristic as a completed sanctions screen. See
+  // db/migrations/0001-ofac-status-not-authoritative.sql.
+  const status = flags.length > 0 ? 'flagged' : 'not_authoritatively_screened';
 
   // Record result in DB
   if (client_id && db) {
@@ -41,7 +48,7 @@ async function execute(context) {
        VALUES ($1, $2, $3, $4, $5, $6, $7)`,
       [
         client_id,
-        'CoreIdentity-OFAC-Agent',
+        'HEURISTIC-PRESCREEN-NOT-SDN-V1',
         `COREG-${Date.now()}`,
         status,
         flags.length,

@@ -1,0 +1,48 @@
+-- CLOSE-GAP-25 (Phase 3.4): pcm_ofac_status gains two values.
+--
+-- No prior migrations exist anywhere in this repo -- schema changes have
+-- been applied ad hoc and left undocumented in version control. This file
+-- exists so that stops being true going forward, same reasoning as
+-- Phase 3.5's requirement to commit GRANT/REVOKE statements regardless of
+-- outcome: the permissions/schema model existing nowhere in git is its own
+-- finding.
+--
+-- Context: agents/ofac-screening/index.js is a hardcoded heuristic
+-- (10 country strings, 4 regex patterns), not a real OFAC/SDN list check.
+-- It previously set pcm_clients.ofac_status = 'clear' when it found no
+-- match, which the kyc_verification gate then treated as a completed
+-- sanctions screen and passed with zero human involvement -- the one case
+-- in that gate that did not require any review. A real sanctioned
+-- individual whose name/country doesn't match the hardcoded patterns would
+-- get 'clear' and advance with no human ever looking at it.
+--
+-- 'clear' is retained in the enum (Postgres does not cheaply support
+-- dropping enum values) but the application stops producing it and the
+-- gate stops accepting it. Live check before this migration: exactly one
+-- pcm_clients row had ofac_status = 'clear', still at pipeline_stage =
+-- 'intake' (has not reached kyc_verification) -- no backfill needed, no
+-- client had already passed the gate under the old, wrong behavior.
+--
+-- not_authoritatively_screened: what the heuristic actually produces when
+--   it finds no match. Honestly labeled as "not a real screen" rather than
+--   "screened clean". Blocks the kyc_verification gate.
+-- attested_out_of_band: set only after a two-principal attestation
+--   (see api/routes/clients.js's POST/PATCH .../ofac/attest-out-of-band)
+--   records that a real, out-of-band screen was actually performed.
+--   Structurally parallel to CLOSE-GAP-19a's manual_review override, but a
+--   distinct status/outcome pair -- an override implies a control ran and
+--   was overridden; here no automated control ran at all, so collapsing
+--   the two into one status would make every sanctions screening event in
+--   the audit trail read as an "override" even for clients where nothing
+--   was ever overridden. That is a false record.
+--
+-- Applied live 2026-08-13 via:
+--   ALTER TYPE pcm_ofac_status ADD VALUE IF NOT EXISTS 'not_authoritatively_screened';
+--   ALTER TYPE pcm_ofac_status ADD VALUE IF NOT EXISTS 'attested_out_of_band';
+-- ADD VALUE is additive and non-blocking -- cannot break any existing
+-- query, requires no downtime, no data migration/backfill involved (no
+-- production data rows were written by this migration, only the type
+-- definition itself gained two new valid labels).
+
+ALTER TYPE pcm_ofac_status ADD VALUE IF NOT EXISTS 'not_authoritatively_screened';
+ALTER TYPE pcm_ofac_status ADD VALUE IF NOT EXISTS 'attested_out_of_band';

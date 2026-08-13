@@ -7,7 +7,9 @@
 
 ## Description
 
-Runs client name, entity, and banking partner against OFAC/sanctions watchlists via third-party API. Logs result to audit trail.
+Heuristic pre-screen only -- matches client name/country against a hardcoded list (10 countries, 4 regex patterns compiled into source). Does NOT call any external OFAC/SDN API or watchlist. A match is real signal (status: flagged); no match does NOT mean a real sanctions screen cleared this client (status: not_authoritatively_screened). Logs result to audit trail.
+
+**CLOSE-GAP-25:** full OFAC SDN list integration is tracked separately (see docs/Instrument-Counterparty-Integrity-Agent-Spec.md §6.3) -- ingesting Treasury's actual SDN dataset and a real matching pipeline is a genuine data-integration dependency, not something this agent currently does.
 
 ## Governance
 
