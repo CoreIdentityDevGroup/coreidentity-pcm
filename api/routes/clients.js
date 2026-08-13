@@ -273,34 +273,113 @@ router.get('/:id/ofac', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ─── RECORD OFAC RESULT ───────────────────────────────────────────────────────
-router.post('/:id/ofac', authorize('trade_group_owner','program_manager','intake_officer'), async (req, res, next) => {
-  try {
-    const { provider, provider_reference_id, status,
-            match_count, raw_response_summary, screened_by_agent } = req.body;
+// ─── RECORD OFAC RESULT — REMOVED (CLOSE-GAP-19a) ─────────────────────────────
+// This route let any caller assert pcm_clients.ofac_status -- the exact
+// column the kyc_verification gate reads -- from an unverified request
+// body, with no evidence it came from a real screen. Route kept (not
+// deleted) so a caller gets 410 Gone instead of a 404 that could pass for
+// a typo. See POST .../ofac/override for the real, dual-control path.
+router.post('/:id/ofac', authorize('trade_group_owner','program_manager','intake_officer'), (req, res) => {
+  res.status(410).json({
+    error:       'Gone',
+    message:     'This endpoint no longer sets OFAC status from an unverified request body. Automated screening is recorded by the ofac-screening agent directly. For a manual/out-of-band screen, use the dual-control override flow.',
+    use_instead: '/api/v1/clients/:id/ofac/override'
+  });
+});
 
-    if (!provider || !status) {
-      return res.status(400).json({ error: 'provider and status are required' });
+// ─── INITIATE OFAC MANUAL OVERRIDE (CLOSE-GAP-19a, step 1 of 2) ──────────────
+// Records that a first principal is asserting an out-of-band screen result.
+// Does NOT set pcm_clients.ofac_status -- the KYC gate does not accept this
+// until a second, distinct principal confirms via the countersign endpoint
+// below. A single request naming two people is not dual control.
+router.post('/:id/ofac/override', authorize('trade_group_owner'), async (req, res, next) => {
+  try {
+    const { reason } = req.body;
+    if (!reason || !reason.trim()) {
+      return res.status(400).json({ error: 'reason is required — document the out-of-band screen this override is based on' });
     }
+
+    const client = await db.clients.query(
+      `SELECT client_id FROM pcm_clients WHERE client_id = $1 AND deleted_at IS NULL`,
+      [req.params.id]
+    );
+    if (!client.rows.length) return res.status(404).json({ error: 'Client not found' });
+
+    const initiatedBy = req.user.sub || req.user.email;
 
     const result = await db.clients.query(
       `INSERT INTO pcm_ofac_results
-        (client_id, provider, provider_reference_id, status,
-         match_count, raw_response_summary, screened_by_agent)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)
+        (client_id, provider, status, raw_response_summary, reviewed_by, reviewed_at, review_outcome)
+       VALUES ($1, 'MANUAL_OVERRIDE', 'manual_review', $2, $3, NOW(), 'PENDING_COUNTERSIGN')
        RETURNING *`,
-      [req.params.id, provider, provider_reference_id, status,
-       match_count || 0, raw_response_summary, screened_by_agent]
+      [req.params.id, reason, initiatedBy]
+    );
+
+    res.status(201).json({
+      result_id:  result.rows[0].result_id,
+      status:     'PENDING_COUNTERSIGN',
+      message:    'Override initiated. A different trade_group_owner must countersign before this affects the KYC gate.',
+      initiated_by: initiatedBy
+    });
+  } catch (err) { next(err); }
+});
+
+// ─── COUNTERSIGN OFAC MANUAL OVERRIDE (CLOSE-GAP-19a, step 2 of 2) ───────────
+// Only after this succeeds does pcm_clients.ofac_status become
+// 'manual_review' -- never 'clear'. Distinguishable from a real screen in
+// every downstream query, permanently.
+router.patch('/:id/ofac/override/:result_id/countersign', authorize('trade_group_owner'), async (req, res, next) => {
+  try {
+    const { reason } = req.body;
+    if (!reason || !reason.trim()) {
+      return res.status(400).json({ error: 'reason is required — document your own independent basis for confirming this override' });
+    }
+
+    const countersignedBy = req.user.sub || req.user.email;
+
+    const existing = await db.clients.query(
+      `SELECT * FROM pcm_ofac_results
+       WHERE result_id = $1 AND client_id = $2 AND provider = 'MANUAL_OVERRIDE'`,
+      [req.params.result_id, req.params.id]
+    );
+    if (!existing.rows.length) return res.status(404).json({ error: 'Override not found' });
+
+    const override = existing.rows[0];
+    if (override.review_outcome !== 'PENDING_COUNTERSIGN') {
+      return res.status(409).json({ error: `Override is not pending countersign (current state: ${override.review_outcome})` });
+    }
+    if (override.reviewed_by === countersignedBy) {
+      return res.status(403).json({ error: 'Cannot countersign your own override — dual control requires a different principal' });
+    }
+
+    const countersignNote = `${override.raw_response_summary} | Countersigned by ${countersignedBy} at ${new Date().toISOString()}: ${reason}`;
+
+    const updated = await db.clients.query(
+      `UPDATE pcm_ofac_results
+       SET review_outcome = 'MANUAL_OVERRIDE_CONFIRMED', raw_response_summary = $1
+       WHERE result_id = $2
+       RETURNING *`,
+      [countersignNote, req.params.result_id]
     );
 
     await db.clients.query(
-      `UPDATE pcm_clients SET ofac_status = $1, ofac_screened_at = NOW(),
-       ofac_provider = $2, ofac_reference_id = $3
-       WHERE client_id = $4`,
-      [status, provider, provider_reference_id, req.params.id]
+      `UPDATE pcm_clients
+       SET ofac_status = 'manual_review', ofac_screened_at = NOW(),
+           ofac_provider = 'MANUAL_OVERRIDE', ofac_reference_id = $1
+       WHERE client_id = $2`,
+      [req.params.result_id, req.params.id]
     );
 
-    res.status(201).json(result.rows[0]);
+    const governance = require('../services/governance');
+    await governance.salLog({
+      agent_id: countersignedBy,
+      action:   'OFAC_MANUAL_OVERRIDE_CONFIRMED',
+      resource: `pcm:client:${req.params.id}`,
+      decision: 'ALLOW',
+      context:  { initiated_by: override.reviewed_by, countersigned_by: countersignedBy, result_id: req.params.result_id }
+    }).catch(() => {});
+
+    res.json(updated.rows[0]);
   } catch (err) { next(err); }
 });
 

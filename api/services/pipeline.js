@@ -37,6 +37,20 @@ const GATE_REQUIREMENTS = {
     if (parseInt(pof.rows[0].count) === 0) errors.push('No Proof of Funds on file');
     if (ofac.rows[0]?.ofac_status === 'pending') errors.push('OFAC screening not completed');
     if (ofac.rows[0]?.ofac_status === 'flagged')  errors.push('OFAC screening flagged — requires manual review');
+    // CLOSE-GAP-19a: 'manual_review' is a dual-control override, never
+    // equivalent to a clean automated screen. Re-verify against
+    // pcm_ofac_results directly that a second principal actually
+    // countersigned -- do not trust the status flag alone.
+    if (ofac.rows[0]?.ofac_status === 'manual_review') {
+      const override = await db.clients.query(
+        `SELECT review_outcome FROM pcm_ofac_results
+         WHERE client_id = $1 AND provider = 'MANUAL_OVERRIDE'
+         ORDER BY screened_at DESC LIMIT 1`, [client_id]
+      );
+      if (override.rows[0]?.review_outcome !== 'MANUAL_OVERRIDE_CONFIRMED') {
+        errors.push('OFAC status is manual_review but the dual-control override was not confirmed by a second principal');
+      }
+    }
     return errors;
   },
 
