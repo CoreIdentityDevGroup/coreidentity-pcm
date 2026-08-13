@@ -103,6 +103,19 @@ jobs:
               print("      AIS_API_URL already present")
           td["containerDefinitions"][0]["environment"] = envs
 
+          # CLOSE-GAP-16 (Step 4a) — ensure SENTINEL_JWT_SECRET is present in
+          # secrets[] (idempotent). Same ARN sentinel's own JWT_SECRET
+          # resolves to (ops-jwt-secret) — sentinelCheck() mints tokens
+          # Sentinel's authenticate middleware will actually accept.
+          secrets_list = td["containerDefinitions"][0].get("secrets") or []
+          SENTINEL_JWT_SECRET_ARN = "arn:aws:secretsmanager:us-east-2:636058550262:secret:ops-jwt-secret-k0Nsi2"
+          if not any(s.get("name") == "SENTINEL_JWT_SECRET" for s in secrets_list):
+              secrets_list.append({"name": "SENTINEL_JWT_SECRET", "valueFrom": SENTINEL_JWT_SECRET_ARN})
+              print(f"      added SENTINEL_JWT_SECRET -> {SENTINEL_JWT_SECRET_ARN}")
+          else:
+              print("      SENTINEL_JWT_SECRET already present")
+          td["containerDefinitions"][0]["secrets"] = secrets_list
+
           allowed = {
               "family", "taskRoleArn", "executionRoleArn", "networkMode",
               "containerDefinitions", "volumes", "placementConstraints",
