@@ -52,16 +52,26 @@ async function emitSuccessMetric() {
 // enough deploys to make that "recurring" cadence unreliable even at
 // desiredCount=1).
 //
-// Idempotency-Key required: an EventBridge Scheduler retry (or any
-// duplicate invocation) with the same key returns the cached result
-// instead of re-running the cycle. A key currently mid-run (status
-// 'running', not yet 'success'/'error') returns 409 rather than allowing
-// a second concurrent execution.
+// Idempotency: a duplicate invocation with the same key returns the
+// cached result instead of re-running the cycle. A key currently mid-run
+// (status 'running', not yet 'success'/'error') returns 409 rather than
+// allowing a second concurrent execution.
+//
+// The key is NOT required from the caller. EventBridge Scheduler targets
+// have static input/headers per schedule -- there is no verified way to
+// have it inject a fresh value on every firing, so requiring an
+// externally-supplied key would make every firing after the first a
+// permanent no-op replay of whatever ran first. Default: derive the key
+// server-side as a time bucket matching the schedule's own cadence
+// (PCM_MONITORING_INTERVAL_MS, default 15 min) -- retries WITHIN one
+// cycle naturally dedupe against each other, and the next scheduled
+// firing lands in a new bucket and actually runs. An explicit
+// Idempotency-Key header is still honored if a caller supplies one (manual
+// testing, or a future scheduler that does support per-firing values).
 router.post('/monitoring', async (req, res, next) => {
-  const idempotencyKey = req.headers['idempotency-key'];
-  if (!idempotencyKey) {
-    return res.status(400).json({ error: 'Idempotency-Key header is required' });
-  }
+  const intervalMs = parseInt(process.env.PCM_MONITORING_INTERVAL_MS || '900000', 10);
+  const idempotencyKey = req.headers['idempotency-key']
+    || `scheduled-${Math.floor(Date.now() / intervalMs)}`;
 
   try {
     const existing = await db.clients.query(
