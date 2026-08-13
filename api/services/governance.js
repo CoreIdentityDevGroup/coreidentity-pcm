@@ -1,5 +1,6 @@
 'use strict';
 const notifier = require('./notifier');
+const jwt      = require('jsonwebtoken');
 
 const https = require('https');
 const http  = require('http');
@@ -8,6 +9,27 @@ const SAL_KERNEL_URL  = process.env.SAL_KERNEL_URL  || 'http://sal-kernel.coreid
 const SENTINEL_URL    = process.env.SENTINEL_URL    || 'https://api.coreidentitygroup.com';
 const AGO_URL         = process.env.AGO_URL         || 'https://api.coreidentitygroup.com';
 const COREIDENTITY_API_KEY = process.env.COREIDENTITY_API_KEY;
+
+// CLOSE-GAP-14: Sentinel's /api/sentinel/evaluate requires an authenticated
+// bearer JWT (coreidentity-dashboard's shared `authenticate` middleware,
+// HS256, verified against its own JWT_SECRET -- currently ops-jwt-secret).
+// The route itself has no additional scope/role requirement beyond a valid
+// signature (read directly from api/src/routes/sentinel.js -- no
+// requireAdmin, no scope claim check on /evaluate). SENTINEL_JWT_SECRET
+// must be provisioned as the same value Sentinel's own JWT_SECRET resolves
+// to, or every call will 401.
+const SENTINEL_JWT_SECRET = process.env.SENTINEL_JWT_SECRET;
+
+function mintSentinelToken() {
+  if (!SENTINEL_JWT_SECRET) {
+    throw new Error('SENTINEL_JWT_SECRET not configured');
+  }
+  return jwt.sign(
+    { sub: 'pcm-api', role: 'service', aud: 'sentinel', iss: 'coreg-pcm' },
+    SENTINEL_JWT_SECRET,
+    { algorithm: 'HS256', expiresIn: '60s' }
+  );
+}
 
 function makeRequest(urlStr, method, body, headers = {}) {
   return new Promise((resolve) => {
@@ -98,11 +120,25 @@ async function salLog(event) {
 
 // ── SENTINEL ENFORCEMENT ──────────────────────────────────────────────────────
 async function sentinelCheck(action, resource, context = {}) {
+  let authHeaders;
+  try {
+    authHeaders = { Authorization: `Bearer ${mintSentinelToken()}` };
+  } catch (err) {
+    console.error(JSON.stringify({
+      level: 'error',
+      message: 'Sentinel token mint failed — FAIL CLOSE — action blocked',
+      action, resource, error: err.message,
+      timestamp: new Date().toISOString()
+    }));
+    return { allowed: false, decision: 'BLOCK_SENTINEL_UNAVAILABLE', reason: `Cannot authenticate to Sentinel: ${err.message}` };
+  }
+
   try {
     const result = await makeRequest(
       `${SENTINEL_URL}/api/sentinel/evaluate`,
       'POST',
-      { action, resource, context, platform: 'CoreG-PCM' }
+      { action, resource, context, platform: 'CoreG-PCM' },
+      authHeaders
     );
 
     if (result.status === 200) {
