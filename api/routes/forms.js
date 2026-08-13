@@ -119,10 +119,27 @@ router.post('/', authorize('trade_group_owner','program_manager','intake_officer
 });
 
 // ─── UPDATE AGREEMENT STATUS ──────────────────────────────────────────────────
+// CLOSE-GAP-19b: 'fully_executed' and 'partially_signed' are computed by
+// PATCH /:id/parties/:party_id/sign from actual signature state -- they
+// must not be settable here from an unverified request body. Every other
+// status in the enum (draft, pending_signature, expired, superseded,
+// voided) has no signature-computed equivalent and remains a legitimate
+// manual action.
+const SIGNATURE_COMPUTED_STATUSES = ['fully_executed', 'partially_signed'];
+
 router.patch('/:id/status', authorize('trade_group_owner','program_manager'), async (req, res, next) => {
   try {
     const { status } = req.body;
     if (!status) return res.status(400).json({ error: 'status is required' });
+
+    if (SIGNATURE_COMPUTED_STATUSES.includes(status)) {
+      return res.status(403).json({
+        error:       'Status not settable directly',
+        status,
+        message:     `'${status}' is computed from actual party signatures, not assertable directly. Use PATCH /:id/parties/:party_id/sign.`,
+        use_instead: '/api/v1/forms/:id/parties/:party_id/sign'
+      });
+    }
 
     const result = await db.forms.query(
       `UPDATE pcm_agreements SET status = $1
