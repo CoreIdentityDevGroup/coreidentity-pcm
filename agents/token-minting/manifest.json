@@ -5,7 +5,7 @@
   "version": "1.0.0",
   "trigger": "stage_8_trade_close",
   "pipeline_stage": "tokenization",
-  "description": "Mints a classification certificate upon trade completion. Certificate is not cryptographically signed — no PQ signing backend is implemented. ID and verification only — no transferable right.",
+  "description": "[SUPERSEDED/DEAD — CLOSE-GAP-23: no reachable call site; real tokenization is api/services/pipeline.js triggerTokenization()] Mints a classification certificate upon trade completion. Certificate is not cryptographically signed — no PQ signing backend is implemented. ID and verification only — no transferable right.",
   "ais_required": true,
   "sal_logging": "full",
   "human_gate_required": false,

@@ -162,26 +162,29 @@ router.post('/:id/advance', authorize('trade_group_owner','program_manager','int
 // wrong object is exactly the mistake CLOSE-GAP-11 exists to unwind. Do not
 // call this function until Q10 is resolved and the correct call site is
 // chosen deliberately — not restored to its old location by default.
+//
+// CLOSE-GAP-24 (Phase 3.3): the 'completed' branch specifically must not be
+// wired up as-is even once Q10 is resolved. agents/deletion-certification
+// issues a permanent pcm_deletion_certificates row asserting documents were
+// deleted, but performs no deletion (no DELETE statement anywhere in that
+// module, against pcm_kyc_documents/pcm_pof_records/pcm_asset_documents or
+// GCS). Wiring this today would generate a false compliance certificate on
+// every asset reaching 'completed', not close a gap. Real deletion is an
+// out-of-scope product/legal decision (retention holds, reversibility,
+// what "delete" means for GCS-backed vault objects), not a coding task.
 async function _unwiredStageAdvanceTriggers(assetId, asset, to_stage) {
   const _stageOrch = require(require('path').join(__dirname, '../../agent-orchestrator'));
 
-  if (to_stage === 'tokenization') {
-    const val = await db.assets.query(
-      `SELECT appraised_value FROM pcm_valuations
-       WHERE asset_id = $1 ORDER BY created_at DESC LIMIT 1`,
-      [assetId]
-    );
-    const r = await _stageOrch.runAgent('token-minting', {
-      asset_id:           assetId,
-      client_id:          asset.client_id,
-      pipeline_reference: asset.pipeline_reference,
-      appraised_value:    val.rows[0]?.appraised_value || asset.declared_value,
-      currency:           asset.currency,
-      bank_assignment:    asset.bank_assignment,
-      triggered_by:       'auto'
-    });
-    console.log(JSON.stringify({ level:'info', message:'token-minting done', status: r.status }));
-  } else if (to_stage === 'completed') {
+  // CLOSE-GAP-23 (Phase 3.3): the 'tokenization' branch that used to call
+  // agents/token-minting is removed, not just left unwired. That module
+  // writes a differently-shaped record to pcm_asset_documents and never
+  // sets pcm_assets.token_id -- wiring it here would not satisfy the
+  // completed-stage gate (which checks token_id), only create a confusing
+  // duplicate side-effect. Real tokenization is api/services/pipeline.js's
+  // triggerTokenization(), already wired into advancePipeline() at
+  // to_stage === 'tokenization'. See agents/token-minting/index.js and its
+  // manifest.json for the superseded-module marker.
+  if (to_stage === 'completed') {
     const r = await _stageOrch.runAgent('deletion-certification', {
       asset_id:           assetId,
       client_id:          asset.client_id,

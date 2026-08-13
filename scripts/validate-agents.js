@@ -109,8 +109,8 @@ const AGENT_TRACE = {
     file: 'agent-orchestrator.js', pattern: "runAgent('transaction-monitoring'", reachable: true,
   },
   'token-minting': {
-    realSite: 'DEAD — only call site is _unwiredStageAdvanceTriggers(), which has zero callers. Real tokenization runs through a hand-duplicated inline function (pipeline.js triggerTokenization()), a different implementation entirely.',
-    file: 'api/routes/assets.js', pattern: "runAgent('token-minting'", reachable: false,
+    realSite: 'DEAD — CLOSE-GAP-23 removed the only (already-unreachable) call site entirely, so there is no longer any pattern to re-verify against api/routes/assets.js. Confirmed instead via the manifest.json superseded marker. Real tokenization runs through a hand-duplicated inline function (pipeline.js triggerTokenization()), a different implementation entirely.',
+    confirmedDead: true, manifestMarker: '[SUPERSEDED',
   },
   'deletion-certification': {
     realSite: 'DEAD — only call site is _unwiredStageAdvanceTriggers(), which has zero callers. No inline substitute exists either; advancing to completed triggers nothing.',
@@ -148,6 +148,19 @@ function check2_1() {
     const trace = AGENT_TRACE[agent];
     if (!trace) {
       record('2.1', 'fail', `${agent}: no trace entry recorded — this validator does not know this agent's real call site`);
+      continue;
+    }
+
+    if (trace.confirmedDead) {
+      // No call-site pattern to re-verify — the agent has no reference
+      // anywhere in the route/orchestrator source at all. Re-verify the
+      // weaker claim that's still checkable: the manifest carries its
+      // superseded marker (i.e. this wasn't silently reverted).
+      if (manifest.description.startsWith(trace.manifestMarker)) {
+        record('2.1', 'fail', `${agent}: NO REACHABLE CALL SITE. ${trace.realSite}. Manifest trigger '${manifest.trigger}' is asserted but nothing invokes this agent.`);
+      } else {
+        record('2.1', 'warn', `${agent}: manifest superseded-marker missing or changed — re-verify this agent is still actually dead, not just re-flagged`);
+      }
       continue;
     }
 

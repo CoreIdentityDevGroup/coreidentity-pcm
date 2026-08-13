@@ -1,5 +1,16 @@
 'use strict';
 
+// CLOSE-GAP-23 (Phase 3.3): SUPERSEDED / DEAD. This module has no reachable
+// call site (was only invoked via api/routes/assets.js's
+// _unwiredStageAdvanceTriggers(), which had zero callers and has now had
+// this branch removed entirely). Even if wired, it would not satisfy the
+// completed-stage gate: it writes to pcm_asset_documents, never
+// pcm_classification_tokens or pcm_assets.token_id. Canonical tokenization
+// is api/services/pipeline.js's triggerTokenization(), wired into
+// advancePipeline(). Kept in the tree for reference only -- do not wire
+// this module up without first replacing its DB writes to match the real
+// pcm_classification_tokens schema.
+
 async function execute(context) {
   const { asset_id, client_id, pipeline_reference, appraised_value, 
           currency, bank_assignment, db } = context;

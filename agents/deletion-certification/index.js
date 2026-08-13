@@ -56,6 +56,13 @@ async function execute(context) {
   // repo yet (manifest declares SLH-DSA-128s, but nothing implements it) — the
   // signature column is filled with an explicitly-labeled placeholder rather
   // than a fabricated value, so it reads as unsigned in any audit query.
+  //
+  // CLOSE-GAP-24: this function does not delete anything. It only asserts
+  // that deletion occurred (documents_certified, document_manifest with
+  // certified_deleted_at timestamps, retention_period: 'permanent'). Do not
+  // wire this into the pipeline believing it performs the deletion its own
+  // output claims -- see api/routes/assets.js's _unwiredStageAdvanceTriggers()
+  // for the full explanation.
   if (db) {
     const certificate_hash = crypto.createHash('sha256')
       .update(JSON.stringify(certificate)).digest('hex');

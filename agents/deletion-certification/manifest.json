@@ -5,7 +5,7 @@
   "version": "1.0.0",
   "trigger": "trade_closure_event",
   "pipeline_stage": "completed",
-  "description": "Executes automated deletion of sensitive vault contents at trade closure. Generates cryptographic deletion certificate.",
+  "description": "Issues a deletion certificate at trade closure asserting vault contents were deleted. Does NOT itself delete anything -- no deletion logic exists in this codebase for the referenced documents (pcm_kyc_documents, pcm_pof_records, pcm_asset_documents) or their GCS objects. Not currently wired to any pipeline stage.",
   "ais_required": true,
   "sal_logging": "full",
   "human_gate_required": false,
