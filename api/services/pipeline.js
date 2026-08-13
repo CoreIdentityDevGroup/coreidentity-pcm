@@ -18,6 +18,32 @@ const STAGES = {
   on_hold:          { order: 0, gate_role: 'program_manager',   label: 'On Hold' }
 };
 
+// CLOSE-GAP-30: sequential-stage-order enforcement, previously absent
+// entirely. Reads order from STAGES above -- the same source
+// GATE_REQUIREMENTS keys off -- not a second ordering. See this script's
+// header (scripts/close-gap-30-sequential-stage-order.js) for the full
+// design rationale (why rejected/on_hold are any-stage exits, why
+// on_hold's return is the one narrow exception, why all other backward
+// moves are blocked outright).
+function isValidTransition(from_stage, to_stage, priorStageBeforeHold) {
+  if (to_stage === 'rejected') {
+    return from_stage !== 'rejected' && from_stage !== 'completed';
+  }
+  if (to_stage === 'on_hold') {
+    return from_stage !== 'rejected' && from_stage !== 'completed' && from_stage !== 'on_hold';
+  }
+  if (from_stage === 'on_hold') {
+    return priorStageBeforeHold != null && to_stage === priorStageBeforeHold;
+  }
+  if (from_stage === 'rejected') {
+    return false; // terminal -- no transitions out
+  }
+  const fromOrder = STAGES[from_stage]?.order;
+  const toOrder   = STAGES[to_stage]?.order;
+  if (fromOrder == null || toOrder == null) return false;
+  return toOrder === fromOrder + 1;
+}
+
 // ─── GATE REQUIREMENTS PER STAGE ──────────────────────────────────────────────
 const GATE_REQUIREMENTS = {
   kyc_verification: async (asset_id, client_id) => {
@@ -266,6 +292,48 @@ async function advancePipeline({ asset_id, client_id, to_stage, user, notes }) {
     return { success: false, code: 400, error: `Unknown stage: ${to_stage}`, block_reason: 'blocked_error' };
   }
 
+  // 0. Fetch current stage + structural transition-validity check
+  // (CLOSE-GAP-30). Deliberately first, before role authority or gate
+  // requirements: whether a transition is even reachable at all is a
+  // cheaper, more fundamental question than whether the evidence for the
+  // target stage happens to be on file -- checking evidence for a
+  // structurally-invalid transition is backwards (and, in practice,
+  // produces a misleading 'blocked_pending' for the wrong reason if
+  // ordered after the gate check, e.g. resuming on_hold to a stage
+  // that's both structurally wrong AND missing its own evidence would
+  // report the latter, masking the real problem).
+  const asset = await db.assets.query(
+    `SELECT pipeline_stage, pipeline_reference FROM pcm_assets WHERE asset_id = $1`, [asset_id]
+  );
+  const client = await db.clients.query(
+    `SELECT pipeline_stage FROM pcm_clients WHERE client_id = $1 AND deleted_at IS NULL`, [client_id]
+  );
+
+  if (!asset.rows.length) return { success: false, code: 404, error: 'Asset not found' };
+  if (!client.rows.length) return { success: false, code: 404, error: 'Client not found' };
+
+  const from_stage = asset.rows[0].pipeline_stage;
+
+  // Resuming from on_hold needs the pre-hold stage, reconstructed from
+  // pcm_pipeline_history -- the only place it's recorded, since no
+  // separate "held_from_stage" column exists.
+  let priorStageBeforeHold = null;
+  if (from_stage === 'on_hold') {
+    const priorStageResult = await db.assets.query(
+      `SELECT from_stage FROM pcm_pipeline_history
+       WHERE asset_id = $1 AND to_stage = 'on_hold'
+       ORDER BY created_at DESC LIMIT 1`, [asset_id]
+    );
+    priorStageBeforeHold = priorStageResult.rows[0]?.from_stage || null;
+  }
+  if (!isValidTransition(from_stage, to_stage, priorStageBeforeHold)) {
+    return {
+      success: false, code: 422,
+      error: `Invalid stage transition: ${from_stage} -> ${to_stage}. Stages must advance one at a time; direct jumps are rejected.`,
+      block_reason: 'blocked_invalid_transition'
+    };
+  }
+
   let systemCheck;
   if (stage.gate_role === 'system') {
     try {
@@ -295,20 +363,6 @@ async function advancePipeline({ asset_id, client_id, to_stage, user, notes }) {
   if (gateErrors.length > 0) {
     return { success: false, code: 422, error: 'Gate requirements not met', block_reason: 'blocked_pending', gate_errors: gateErrors };
   }
-
-  // 3. Get current stages (moved ahead of the Sentinel check below so
-  //    pipeline_reference is available in its context)
-  const asset = await db.assets.query(
-    `SELECT pipeline_stage, pipeline_reference FROM pcm_assets WHERE asset_id = $1`, [asset_id]
-  );
-  const client = await db.clients.query(
-    `SELECT pipeline_stage FROM pcm_clients WHERE client_id = $1 AND deleted_at IS NULL`, [client_id]
-  );
-
-  if (!asset.rows.length) return { success: false, code: 404, error: 'Asset not found' };
-  if (!client.rows.length) return { success: false, code: 404, error: 'Client not found' };
-
-  const from_stage = asset.rows[0].pipeline_stage;
 
   // CLOSE-GAP-16: Sentinel enforcement gate, fail-closed. Runs after the
   // local checks above (role authority, gate requirements) and before any
@@ -473,4 +527,4 @@ async function getPipelineStatus(asset_id, client_id) {
   };
 }
 
-module.exports = { advancePipeline, getPipelineStatus, validateGate, STAGES };
+module.exports = { advancePipeline, getPipelineStatus, validateGate, STAGES, isValidTransition };

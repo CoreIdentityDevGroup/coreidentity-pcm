@@ -1,20 +1,21 @@
-// Phase 6.1 (SCRUB): isolates the "direct stage jump" assertion from the
-// Sentinel-unavailable confound. gates.negative.test.js's own direct-jump
-// test found that advancePipeline() returned success: false for a
-// straight intake -> tokenization jump, but the block_reason was
-// 'blocked_unavailable' (Sentinel unreachable in the test environment)
-// -- NOT evidence of sequential-order enforcement. That result would be
-// identical for a legitimate, correctly-sequenced advance under the same
-// test conditions, so it does not actually test what it claims to.
+// Phase 6.1/CLOSE-GAP-30 (SCRUB): isolates stage-order-transition
+// assertions from the Sentinel-unavailable confound by mocking
+// governance.sentinelCheck to always ALLOW -- the one question these
+// tests isolate is whether advancePipeline() independently verifies
+// to_stage is a valid transition from from_stage, given role authority
+// and the target stage's own gate requirements are both already
+// satisfied. Mocking an external service boundary (Sentinel) for a unit
+// test is standard practice -- not shipped, not user-facing, and not the
+// synthetic-data pattern this scrub spent five phases removing
+// elsewhere.
 //
-// This file mocks governance.sentinelCheck to always ALLOW, isolating
-// the one question that matters: with role authority and the target
-// stage's own gate requirements both satisfied, does advancePipeline()
-// independently verify that to_stage is the correct next stage after
-// from_stage, or does it only check the target stage in isolation?
-// Mocking an external service boundary (Sentinel) for a unit test is
-// standard practice -- this is not shipped, not user-facing, and not the
-// synthetic-data pattern this scrub spent five phases removing elsewhere.
+// Originally documented the OPPOSITE of what it now asserts: before
+// CLOSE-GAP-30, this exact test proved advancePipeline() had no
+// sequential-order enforcement at all (a direct intake -> tokenization
+// jump succeeded). See SCRUB-PHASE6.txt for the full finding record.
+// Updated to assert the corrected behavior once the fix landed -- a test
+// that keeps asserting a known bug after the bug is fixed is worse than
+// no test.
 'use strict';
 
 jest.mock('../api/services/governance', () => ({
@@ -30,12 +31,13 @@ afterAll(async () => {
   await Promise.all([db.clients.end(), db.assets.end(), db.forms.end(), db.pehf.end()]);
 });
 
-test('FINDING: direct stage jump (intake -> tokenization) is NOT rejected when the target gate happens to be satisfiable, even with Sentinel mocked to ALLOW', async () => {
+test('direct stage jump (intake -> tokenization) is now rejected, even when the target gate is satisfiable and Sentinel allows', async () => {
   const client_id = await fx.createClient();
   const { asset_id } = await fx.createAsset(client_id);
   // Only what tokenization's own gate checks for -- none of
   // kyc_verification/appraisal_review/bank_assignment/collateralization/
-  // monetization/securitization evidence exists for this asset.
+  // monetization/securitization evidence exists. Before CLOSE-GAP-30,
+  // this alone was enough to advance directly to tokenization.
   await fx.addValuation(asset_id, { date_validation_status: 'passed' });
 
   const result = await advancePipeline({
@@ -43,24 +45,63 @@ test('FINDING: direct stage jump (intake -> tokenization) is NOT rejected when t
     user: { sub: 'test-fixture', role: 'trade_group_owner' }
   });
 
+  expect(result.success).toBe(false);
+  expect(result.block_reason).toBe('blocked_invalid_transition');
+
   const check = await db.assets.query(`SELECT pipeline_stage FROM pcm_assets WHERE asset_id = $1`, [asset_id]);
+  expect(check.rows[0].pipeline_stage).toBe('intake');
+});
 
-  if (result.success === true && check.rows[0].pipeline_stage === 'tokenization') {
-    console.warn(
-      '[FINDING, Phase 6.1] advancePipeline() has NO sequential-stage-order enforcement. ' +
-      'An asset can jump directly from intake to tokenization -- skipping kyc_verification, ' +
-      'appraisal_review, bank_assignment, collateralization, monetization, and securitization ' +
-      'entirely -- as long as the TARGET stage\'s own gate_requirements entry happens to be ' +
-      'satisfiable and role authority + Sentinel both allow it. Documented in SCRUB-PHASE6.txt ' +
-      'as a genuine, newly-found gap, not fixed in this pass (a new production behavior change ' +
-      'to a live financial pipeline gate, same caution as Phase 3.4\'s KYC gate change, which was ' +
-      'held for explicit confirmation before implementing).'
-    );
-  }
+test('correctly sequenced single-step advance still succeeds (regression guard: the fix must not block legitimate progression)', async () => {
+  const client_id = await fx.createClient();
+  const { asset_id } = await fx.createAsset(client_id);
+  await fx.addKycDocument(client_id);
+  await fx.addPofRecord(client_id);
+  await fx.confirmOfacAttestation(client_id);
 
-  // Asserts the ACTUAL observed behavior (documents reality), not the
-  // spec's assumed behavior -- see the console.warn above and
-  // SCRUB-PHASE6.txt for what this means.
+  const result = await advancePipeline({
+    asset_id, client_id, to_stage: 'kyc_verification',
+    user: { sub: 'test-fixture', role: 'trade_group_owner' }
+  });
+
   expect(result.success).toBe(true);
-  expect(check.rows[0].pipeline_stage).toBe('tokenization');
+  const check = await db.assets.query(`SELECT pipeline_stage FROM pcm_assets WHERE asset_id = $1`, [asset_id]);
+  expect(check.rows[0].pipeline_stage).toBe('kyc_verification');
+});
+
+test('rejected is reachable from any non-terminal stage, at any time (existing behavior preserved)', async () => {
+  const client_id = await fx.createClient();
+  const { asset_id } = await fx.createAsset(client_id);
+  // Still at 'intake' -- reject must work regardless of how far the
+  // asset has progressed.
+  const result = await advancePipeline({
+    asset_id, client_id, to_stage: 'rejected',
+    user: { sub: 'test-fixture', role: 'trade_group_owner' }, notes: 'test rejection'
+  });
+  expect(result.success).toBe(true);
+});
+
+test('on_hold can only resume to the exact stage it was held from, reconstructed from pcm_pipeline_history', async () => {
+  const client_id = await fx.createClient();
+  const { asset_id } = await fx.createAsset(client_id);
+  await fx.addKycDocument(client_id);
+  await fx.addPofRecord(client_id);
+  await fx.confirmOfacAttestation(client_id);
+
+  // Advance to kyc_verification for real, then hold.
+  const toKyc = await advancePipeline({ asset_id, client_id, to_stage: 'kyc_verification', user: { sub: 'test-fixture', role: 'trade_group_owner' } });
+  expect(toKyc.success).toBe(true);
+  const toHold = await advancePipeline({ asset_id, client_id, to_stage: 'on_hold', user: { sub: 'test-fixture', role: 'program_manager' } });
+  expect(toHold.success).toBe(true);
+
+  // Resuming to the WRONG stage must be rejected.
+  const wrongResume = await advancePipeline({ asset_id, client_id, to_stage: 'appraisal_review', user: { sub: 'test-fixture', role: 'trade_group_owner' } });
+  expect(wrongResume.success).toBe(false);
+  expect(wrongResume.block_reason).toBe('blocked_invalid_transition');
+
+  // Resuming to the CORRECT (pre-hold) stage must succeed.
+  const correctResume = await advancePipeline({ asset_id, client_id, to_stage: 'kyc_verification', user: { sub: 'test-fixture', role: 'trade_group_owner' } });
+  expect(correctResume.success).toBe(true);
+  const check = await db.assets.query(`SELECT pipeline_stage FROM pcm_assets WHERE asset_id = $1`, [asset_id]);
+  expect(check.rows[0].pipeline_stage).toBe('kyc_verification');
 });

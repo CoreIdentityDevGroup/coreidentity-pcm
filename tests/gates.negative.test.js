@@ -214,13 +214,20 @@ describe('unknown/no-gate-definition stage -> absence is never a pass (CLOSE-GAP
 });
 
 describe('direct stage jump', () => {
-  test('jumping straight from intake to tokenization, bypassing 6 intermediate gates, when the target gate happens to be satisfiable', async () => {
+  test('jumping straight from intake to tokenization -> blocked_invalid_transition, before Sentinel is ever consulted (CLOSE-GAP-30)', async () => {
     // Deliberately gives the asset ONLY what tokenization's own gate
     // checks for (a passed valuation) -- none of kyc_verification,
     // appraisal_review, bank_assignment, collateralization, or
-    // monetization/securitization evidence exists. If the pipeline
-    // enforces sequential progression, this must be rejected regardless
-    // of whether the target stage's own gate would pass in isolation.
+    // monetization/securitization evidence exists.
+    //
+    // This originally documented an open finding (no sequential-order
+    // enforcement existed at all -- see git history / SCRUB-PHASE6.txt).
+    // Now that CLOSE-GAP-30 fixed it, this asserts the real outcome. Note
+    // this test does NOT need Sentinel mocked to ALLOW (unlike
+    // gates.stagejump.test.js's more surgical version of this same
+    // assertion) -- the transition-validity check runs before the
+    // Sentinel call, so it's unreachable regardless of Sentinel's
+    // availability, and block_reason distinguishes the two cleanly.
     const client_id = await fx.createClient();
     const { asset_id } = await fx.createAsset(client_id);
     await fx.addValuation(asset_id, { date_validation_status: 'passed' });
@@ -230,13 +237,11 @@ describe('direct stage jump', () => {
       user: { sub: 'test-fixture', role: 'trade_group_owner' }
     });
 
-    // EXPECTED per spec: success === false (direct jump rejected).
-    // Recorded, not asserted blind -- see ~/SCRUB-PHASE6.txt for the
-    // actual result and whether this passed.
-    if (result.success) {
-      console.warn('[FINDING] Direct stage jump from intake to tokenization was NOT rejected -- advancePipeline() has no sequential-order enforcement, only target-stage gate checks. See SCRUB-PHASE6.txt.');
-    }
-    expect(result).toBeDefined(); // always true; real assertion intentionally omitted here -- see report
+    expect(result.success).toBe(false);
+    expect(result.block_reason).toBe('blocked_invalid_transition');
+
+    const check = await db.assets.query(`SELECT pipeline_stage FROM pcm_assets WHERE asset_id = $1`, [asset_id]);
+    expect(check.rows[0].pipeline_stage).toBe('intake');
   });
 });
 
@@ -248,6 +253,14 @@ describe('Sentinel unavailable', () => {
     const client_id = await fx.createClient();
     const { asset_id } = await fx.createAsset(client_id);
     await fx.mintClassificationToken(asset_id, client_id);
+    // CLOSE-GAP-30: advancePipeline() now checks transition validity
+    // before Sentinel, so the asset must actually BE at tokenization
+    // (completed's real predecessor) for a completed-bound advance to
+    // reach the Sentinel check at all -- a raw UPDATE here, not
+    // advancePipeline() itself, since walking through every intermediate
+    // stage via advancePipeline() would each independently hit the same
+    // real Sentinel-unavailable path this test is isolating.
+    await db.assets.query(`UPDATE pcm_assets SET pipeline_stage = 'tokenization' WHERE asset_id = $1`, [asset_id]);
     // 'completed' gate passes (token minted); gate_role is 'system', so
     // role authority auto-passes too via the systemCheck path. Only the
     // Sentinel check remains before mutation.

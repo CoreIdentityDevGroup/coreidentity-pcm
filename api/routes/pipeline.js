@@ -249,4 +249,35 @@ router.post('/hold', authorize('trade_group_owner','program_manager'), async (re
   } catch (err) { next(err); }
 });
 
+// ─── RESUME ASSET FROM HOLD (CLOSE-GAP-30) ─────────────────────────────────────
+// The only valid exit from on_hold: back to exactly the stage the asset
+// was on immediately before being held, reconstructed from
+// pcm_pipeline_history. advancePipeline()'s own isValidTransition() check
+// re-verifies this independently rather than trusting the lookup here.
+router.post('/resume', authorize('trade_group_owner','program_manager'), async (req, res, next) => {
+  try {
+    const { asset_id, client_id, notes } = req.body;
+    if (!asset_id || !client_id) {
+      return res.status(400).json({ error: 'asset_id and client_id required' });
+    }
+
+    const db = require('../services/db');
+    const priorStage = await db.assets.query(
+      `SELECT from_stage FROM pcm_pipeline_history
+       WHERE asset_id = $1 AND to_stage = 'on_hold'
+       ORDER BY created_at DESC LIMIT 1`, [asset_id]
+    );
+    if (!priorStage.rows.length) {
+      return res.status(409).json({ error: 'No on_hold transition found for this asset — nothing to resume' });
+    }
+
+    const result = await advancePipeline({
+      asset_id, client_id, to_stage: priorStage.rows[0].from_stage,
+      user: req.user, notes
+    });
+
+    res.json(result);
+  } catch (err) { next(err); }
+});
+
 module.exports = router;

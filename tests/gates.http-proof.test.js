@@ -91,4 +91,35 @@ describe('Step 4d — real HTTP proof of gate enforcement', () => {
 
     expect(res.status).toBe(403);
   });
+
+  test('POST /api/v1/pipeline/hold then /resume (CLOSE-GAP-30) -> real HTTP round trip back to the exact pre-hold stage', async () => {
+    const client_id = await fx.createClient();
+    const { asset_id } = await fx.createAsset(client_id);
+    await fx.addKycDocument(client_id);
+    await fx.addPofRecord(client_id);
+    await fx.confirmOfacAttestation(client_id);
+
+    const toKyc = await request(app)
+      .post('/api/v1/pipeline/advance')
+      .set('Authorization', `Bearer ${tokenFor('intake_officer')}`)
+      .send({ asset_id, client_id, to_stage: 'kyc_verification' });
+    expect(toKyc.status).toBe(200);
+
+    const toHold = await request(app)
+      .post('/api/v1/pipeline/hold')
+      .set('Authorization', `Bearer ${tokenFor('program_manager')}`)
+      .send({ asset_id, client_id, notes: 'http-proof hold' });
+    expect(toHold.status).toBe(200);
+    expect(toHold.body.success).toBe(true);
+
+    const resumed = await request(app)
+      .post('/api/v1/pipeline/resume')
+      .set('Authorization', `Bearer ${tokenFor('trade_group_owner')}`)
+      .send({ asset_id, client_id });
+    expect(resumed.status).toBe(200);
+    expect(resumed.body.success).toBe(true);
+
+    const check = await db.assets.query(`SELECT pipeline_stage FROM pcm_assets WHERE asset_id = $1`, [asset_id]);
+    expect(check.rows[0].pipeline_stage).toBe('kyc_verification');
+  });
 });

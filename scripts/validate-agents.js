@@ -626,6 +626,53 @@ function check2_7() {
 }
 
 // ═════════════════════════════════════════════════════════════════════════
+// 2.8 — GATE-BEARING STATE MACHINE ADJACENCY (CLOSE-GAP-30)
+// ═════════════════════════════════════════════════════════════════════════
+//
+// General form: advancePipeline() previously checked role authority and
+// the TARGET stage's own GATE_REQUIREMENTS entry, but never verified
+// to_stage was actually reachable from from_stage -- an asset could jump
+// directly from intake to tokenization, skipping every intermediate
+// gate, as long as the target's own narrow condition happened to be
+// satisfiable (confirmed live by a test before the fix -- see
+// tests/gates.stagejump.test.js history). Any gate-bearing state machine
+// with per-stage checks but no adjacency constraint has the same shape
+// of bug: stage-local correctness does not imply sequence-level
+// correctness.
+//
+// This codebase has exactly one such state machine (STAGES/
+// GATE_REQUIREMENTS/advancePipeline() in api/services/pipeline.js), so
+// this check is necessarily specific to it rather than a generic
+// state-machine-detector across arbitrary source -- flagged honestly
+// rather than overclaiming broader coverage. It verifies the actual fix
+// is present and hasn't regressed: advancePipeline() must call an
+// isValidTransition()-shaped guard, using from_stage, before the DB
+// mutation that writes pipeline_stage.
+function check2_8() {
+  const src = readIfExists(SERVICES_PIPELINE_FILE);
+  if (!src) { record('2.8', 'warn', 'Could not read pipeline.js — state-machine adjacency check skipped'); return; }
+
+  const fnMatch = src.match(/async function advancePipeline\([^)]*\)\s*\{([\s\S]*?)\n\}/);
+  if (!fnMatch) { record('2.8', 'fail', 'advancePipeline() not found — cannot verify adjacency enforcement is present'); return; }
+  const body = fnMatch[1];
+
+  const callsGuard = /isValidTransition\s*\(\s*from_stage/.test(body);
+  const guardDefined = /function\s+isValidTransition\s*\(/.test(src);
+  const mutatesBeforeGuard = (() => {
+    const guardIdx = body.search(/isValidTransition\s*\(/);
+    const mutateIdx = body.search(/UPDATE\s+pcm_assets\s+SET\s+pipeline_stage/i);
+    if (guardIdx === -1 || mutateIdx === -1) return mutateIdx !== -1; // mutation with no guard at all -> true (bad)
+    return mutateIdx < guardIdx;
+  })();
+
+  if (guardDefined && callsGuard && !mutatesBeforeGuard) {
+    record('2.8', 'pass', 'advancePipeline() calls isValidTransition(from_stage, ...) before mutating pipeline_stage — sequential adjacency enforced');
+  } else {
+    record('2.8', 'fail', `advancePipeline() does not verifiably enforce stage adjacency before mutation (guardDefined=${guardDefined}, callsGuard=${callsGuard}, mutatesBeforeGuard=${mutatesBeforeGuard}) — a direct multi-stage jump may be reachable again. See CLOSE-GAP-30.`);
+  }
+}
+
+// ═════════════════════════════════════════════════════════════════════════
 // MAIN
 // ═════════════════════════════════════════════════════════════════════════
 
@@ -659,6 +706,8 @@ async function main() {
   check2_6();
   console.log('\n── 2.7 Gate allowlist/blocklist pattern ────────────────');
   check2_7();
+  console.log('\n── 2.8 State-machine adjacency (CLOSE-GAP-30) ──────────');
+  check2_8();
 
   for (const r of results) {
     const icon = r.level === 'pass' ? '✓' : r.level === 'warn' ? '⚠' : '✗';
