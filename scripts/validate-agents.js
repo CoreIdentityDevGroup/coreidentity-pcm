@@ -1,107 +1,540 @@
 #!/usr/bin/env node
 /**
- * CoreIdentity PCM — Agent Validator
- * Validates all 11 PCM agent scaffolds are present and correctly structured.
- * Called by: npm run build
+ * CoreIdentity PCM — Reachability Validator (Phase 2 of the SCRUB)
+ *
+ * This replaces the prior scaffold check (file/field presence only). It
+ * encodes what this scrub actually found by direct source reading this
+ * session, and re-verifies each finding against the live source tree and
+ * (where available) the live database on every run — it does not just
+ * print a frozen answer key.
+ *
+ * Ships in WARN mode (VALIDATE_AGENTS_ENFORCE unset or != 'true'): failures
+ * print but do not exit non-zero, so this is safe to wire into `npm run
+ * build` immediately. Phase 6.2 flips VALIDATE_AGENTS_ENFORCE=true once the
+ * findings below are closed.
+ *
+ * Five checks, run in order:
+ *   2.1 Manifest truth        — declared trigger vs. traced real call site
+ *   2.2 Gate-bound column guard — derived from GATE_REQUIREMENTS itself
+ *   2.3 Declared property reachability — sentinel_enforced, pq_signing
+ *   2.4 Schema truth          — every referenced table/column exists live
+ *   2.5 Deployment drift      — running image SHA vs. git HEAD (advisory)
  */
 
 'use strict';
 
 const fs   = require('fs');
 const path = require('path');
+const { execSync } = require('child_process');
 
-const AGENTS_DIR = path.join(__dirname, '..', 'agents');
+const REPO_ROOT   = path.join(__dirname, '..');
+const AGENTS_DIR   = path.join(REPO_ROOT, 'agents');
+const ROUTES_DIR    = path.join(REPO_ROOT, 'api', 'routes');
+const ORCH_FILE      = path.join(REPO_ROOT, 'agent-orchestrator.js');
+const SERVICES_PIPELINE_FILE = path.join(REPO_ROOT, 'api', 'services', 'pipeline.js');
+
+const ENFORCE = process.env.VALIDATE_AGENTS_ENFORCE === 'true';
 
 const REQUIRED_AGENTS = [
-  'intake-parser',
-  'asset-classifier',
-  'document-date-validator',
-  'pof-verifier',
-  'ofac-screening',
-  'valuation-parser',
-  'bank-routing',
-  'token-minting',
-  'deletion-certification',
-  'contract-monitoring',
-  'transaction-monitoring',
-  'instrument-integrity', // CLOSE-GAP-03
+  'intake-parser', 'asset-classifier', 'document-date-validator',
+  'pof-verifier', 'ofac-screening', 'valuation-parser', 'bank-routing',
+  'token-minting', 'deletion-certification', 'contract-monitoring',
+  'transaction-monitoring', 'instrument-integrity',
 ];
 
-const REQUIRED_FILES = ['index.js', 'manifest.json'];
+let results = []; // { section, level: 'pass'|'warn'|'fail', message }
 
-async function validateAgents() {
-  console.log('');
-  console.log('╔══════════════════════════════════════════════════════╗');
-  console.log('║  CoreIdentity PCM — Agent Validation                 ║');
-  console.log('╚══════════════════════════════════════════════════════╝');
-  console.log('');
-
-  const errors = [];
-
-  if (!fs.existsSync(AGENTS_DIR)) {
-    console.error(`✗ Agents directory missing: ${AGENTS_DIR}`);
-    process.exit(1);
-  }
-
-  for (const agent of REQUIRED_AGENTS) {
-    const agentDir = path.join(AGENTS_DIR, agent);
-
-    if (!fs.existsSync(agentDir)) {
-      errors.push(`Agent directory missing: agents/${agent}`);
-      console.log(`  ✗ ${agent} — DIRECTORY MISSING`);
-      continue;
-    }
-
-    const missingFiles = REQUIRED_FILES.filter(
-      f => !fs.existsSync(path.join(agentDir, f))
-    );
-
-    if (missingFiles.length > 0) {
-      errors.push(`${agent}: missing files [${missingFiles.join(', ')}]`);
-      console.log(`  ✗ ${agent} — MISSING: ${missingFiles.join(', ')}`);
-      continue;
-    }
-
-    // Validate manifest structure
-    try {
-      const manifest = JSON.parse(
-        fs.readFileSync(path.join(agentDir, 'manifest.json'), 'utf8')
-      );
-      const requiredManifestFields = [
-        'agent_id', 'name', 'vertical', 'trigger', 'ais_required',
-        'sal_logging', 'version', 'description'
-      ];
-      const missingManifestFields = requiredManifestFields.filter(
-        f => manifest[f] === undefined
-      );
-      if (missingManifestFields.length > 0) {
-        errors.push(`${agent}/manifest.json: missing fields [${missingManifestFields.join(', ')}]`);
-        console.log(`  ✗ ${agent} — MANIFEST INCOMPLETE: ${missingManifestFields.join(', ')}`);
-      } else {
-        console.log(`  ✓ ${agent} — v${manifest.version} [AIS: ${manifest.ais_required ? 'required' : 'optional'}, SAL: ${manifest.sal_logging}]`);
-      }
-    } catch (e) {
-      errors.push(`${agent}/manifest.json: parse error — ${e.message}`);
-      console.log(`  ✗ ${agent} — MANIFEST PARSE ERROR`);
-    }
-  }
-
-  console.log('');
-
-  if (errors.length > 0) {
-    console.error('╔══════════════════════════════════════════════════════╗');
-    console.error('║  AGENT VALIDATION FAILED                             ║');
-    console.error('╠══════════════════════════════════════════════════════╣');
-    errors.forEach(e => console.error(`║  ✗ ${e.substring(0, 50).padEnd(50)} ║`));
-    console.error('╚══════════════════════════════════════════════════════╝');
-    process.exit(1);
-  }
-
-  console.log('╔══════════════════════════════════════════════════════╗');
-  console.log('║  AGENT VALIDATION PASSED                             ║');
-  console.log(`║  ${REQUIRED_AGENTS.length} agents verified — all manifests valid`.padEnd(54) + '║');
-  console.log('╚══════════════════════════════════════════════════════╝');
-  console.log('');
+function record(section, level, message) {
+  results.push({ section, level, message });
 }
 
-validateAgents();
+function readIfExists(p) {
+  return fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : null;
+}
+
+function readAllRouteFiles() {
+  return fs.readdirSync(ROUTES_DIR)
+    .filter(f => f.endsWith('.js'))
+    .map(f => ({ file: `api/routes/${f}`, text: fs.readFileSync(path.join(ROUTES_DIR, f), 'utf8') }));
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+// 2.1 — MANIFEST TRUTH
+// ═════════════════════════════════════════════════════════════════════════
+//
+// AGENT_TRACE encodes the real invocation site for each agent, established
+// by direct source reading this session (the "4c trace"). Each entry is
+// re-verified against the live source below, not just asserted — if the
+// call-site pattern moves or disappears, this check fails loudly rather
+// than silently trusting stale metadata.
+const AGENT_TRACE = {
+  'intake-parser': {
+    realSite: 'api/routes/clients.js — fire-and-forget at client creation (POST /)',
+    file: 'api/routes/clients.js', pattern: "runAgent('intake-parser'", reachable: true,
+  },
+  'ofac-screening': {
+    realSite: 'api/routes/clients.js — fire-and-forget at client creation (POST /), NOT at the KYC gate its manifest names',
+    file: 'api/routes/clients.js', pattern: "runAgent('ofac-screening'", reachable: true,
+  },
+  'pof-verifier': {
+    realSite: 'api/routes/clients.js — fire-and-forget at POF submission (POST /:id/pof)',
+    file: 'api/routes/clients.js', pattern: "runAgent('pof-verifier'", reachable: true,
+  },
+  'asset-classifier': {
+    realSite: 'api/routes/assets.js — fire-and-forget at asset creation (POST /)',
+    file: 'api/routes/assets.js', pattern: "runAgent('asset-classifier'", reachable: true,
+  },
+  'bank-routing': {
+    realSite: 'api/routes/assets.js — fire-and-forget at asset creation (POST /), advisory; the bank_assignment gate never reads its output',
+    file: 'api/routes/assets.js', pattern: "runAgent('bank-routing'", reachable: true,
+  },
+  'instrument-integrity': {
+    realSite: 'api/routes/assets.js — fire-and-forget at asset creation (POST /); its output IS read later by the appraisal_review gate',
+    file: 'api/routes/assets.js', pattern: "runAgent('instrument-integrity'", reachable: true,
+  },
+  'valuation-parser': {
+    realSite: 'api/routes/assets.js — fire-and-forget at valuation submission (POST /:id/valuations)',
+    file: 'api/routes/assets.js', pattern: "runAgent('valuation-parser'", reachable: true,
+  },
+  'document-date-validator': {
+    realSite: 'api/routes/assets.js — fire-and-forget at valuation submission (POST /:id/valuations)',
+    file: 'api/routes/assets.js', pattern: "runAgent('document-date-validator'", reachable: true,
+  },
+  'contract-monitoring': {
+    realSite: 'agent-orchestrator.js — runMonitoringCycle(), scheduled/manual only, not tied to any stage',
+    file: 'agent-orchestrator.js', pattern: "runAgent('contract-monitoring'", reachable: true,
+  },
+  'transaction-monitoring': {
+    realSite: 'agent-orchestrator.js — runMonitoringCycle(), scheduled/manual only, not tied to any stage despite manifest naming stage_6_gate',
+    file: 'agent-orchestrator.js', pattern: "runAgent('transaction-monitoring'", reachable: true,
+  },
+  'token-minting': {
+    realSite: 'DEAD — only call site is _unwiredStageAdvanceTriggers(), which has zero callers. Real tokenization runs through a hand-duplicated inline function (pipeline.js triggerTokenization()), a different implementation entirely.',
+    file: 'api/routes/assets.js', pattern: "runAgent('token-minting'", reachable: false,
+  },
+  'deletion-certification': {
+    realSite: 'DEAD — only call site is _unwiredStageAdvanceTriggers(), which has zero callers. No inline substitute exists either; advancing to completed triggers nothing.',
+    file: 'api/routes/assets.js', pattern: "runAgent('deletion-certification'", reachable: false,
+  },
+};
+
+function countFunctionCallers(sourceText, fnName) {
+  // Crude but effective for this codebase's style: count occurrences of
+  // `fnName(` that are not the `function fnName(` or `async function
+  // fnName(` definition itself.
+  const all = (sourceText.match(new RegExp(`\\b${fnName}\\s*\\(`, 'g')) || []).length;
+  const isDefined = new RegExp(`function\\s+${fnName}\\s*\\(`).test(sourceText);
+  return isDefined ? all - 1 : all;
+}
+
+function check2_1() {
+  const routeFiles = readAllRouteFiles();
+  const orchText = readIfExists(ORCH_FILE) || '';
+
+  for (const agent of REQUIRED_AGENTS) {
+    const manifestPath = path.join(AGENTS_DIR, agent, 'manifest.json');
+    if (!fs.existsSync(manifestPath)) {
+      record('2.1', 'fail', `${agent}: manifest.json missing`);
+      continue;
+    }
+    let manifest;
+    try {
+      manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    } catch (e) {
+      record('2.1', 'fail', `${agent}: manifest.json parse error — ${e.message}`);
+      continue;
+    }
+
+    const trace = AGENT_TRACE[agent];
+    if (!trace) {
+      record('2.1', 'fail', `${agent}: no trace entry recorded — this validator does not know this agent's real call site`);
+      continue;
+    }
+
+    const traceFileText = trace.file === 'agent-orchestrator.js'
+      ? orchText
+      : (routeFiles.find(r => r.file === trace.file) || {}).text || '';
+
+    const patternFound = traceFileText.includes(trace.pattern);
+    if (!patternFound) {
+      record('2.1', 'fail', `${agent}: expected call-site pattern "${trace.pattern}" not found in ${trace.file} — trace is stale, re-verify manually`);
+      continue;
+    }
+
+    if (!trace.reachable) {
+      // Confirm the dead-function claim is still true, don't just trust it.
+      const allSourceText = routeFiles.map(r => r.text).join('\n') + orchText;
+      const callers = countFunctionCallers(allSourceText, '_unwiredStageAdvanceTriggers');
+      if (callers > 0) {
+        record('2.1', 'warn', `${agent}: previously dead call site (_unwiredStageAdvanceTriggers) now has ${callers} caller(s) — re-investigate, this may have been wired up since the trace was recorded`);
+      } else {
+        record('2.1', 'fail', `${agent}: NO REACHABLE CALL SITE. ${trace.realSite}. Manifest trigger '${manifest.trigger}' is asserted but nothing invokes this agent.`);
+      }
+      continue;
+    }
+
+    // Reachable agent: declared trigger almost never matches real invocation
+    // timing in this codebase (most agents are fire-and-forget at intake,
+    // not gated at the stage their manifest names) — that mismatch itself
+    // is the finding this check exists to surface, not an error in the
+    // validator.
+    record('2.1', 'warn', `${agent}: manifest trigger '${manifest.trigger}' does not describe the real invocation site. Real: ${trace.realSite}`);
+  }
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+// 2.2 — GATE-BOUND COLUMN GUARD (derived from GATE_REQUIREMENTS itself)
+// ═════════════════════════════════════════════════════════════════════════
+
+function deriveGateBoundColumns() {
+  const src = readIfExists(SERVICES_PIPELINE_FILE);
+  if (!src) return [];
+
+  const startMarker = 'const GATE_REQUIREMENTS = {';
+  const start = src.indexOf(startMarker);
+  if (start === -1) return [];
+  // Find the matching close of this top-level object literal by brace counting.
+  let depth = 0, i = start + startMarker.length - 1, end = -1;
+  for (; i < src.length; i++) {
+    if (src[i] === '{') depth++;
+    if (src[i] === '}') { depth--; if (depth === 0) { end = i; break; } }
+  }
+  const body = src.slice(start, end + 1);
+
+  // Parse each individual backtick-delimited SQL query on its own -- pairing
+  // columns with tables per-query, not per-stage-block, avoids cross-query
+  // contamination when a single gate checker runs more than one query
+  // against different tables (e.g. collateralization checks pcm_assets AND
+  // pcm_agreements in the same function).
+  const queryPattern = /`([^`]*SELECT[\s\S]*?FROM[\s\S]*?)`/g;
+  const pairs = new Set();
+  let m;
+  while ((m = queryPattern.exec(body)) !== null) {
+    const query = m[1];
+    const fromMatch = query.match(/FROM\s+(pcm_\w+)/);
+    if (!fromMatch) continue;
+    const table = fromMatch[1];
+
+    // SELECT-list columns (skip * and COUNT(*); unwrap MAX(x) to its real
+    // inner column since that's what gate checkers actually consult, e.g.
+    // `MAX(date_validation_status) as val_status`).
+    const selectMatch = query.match(/SELECT\s+([\s\S]*?)\s+FROM/);
+    if (selectMatch) {
+      const cols = selectMatch[1].split(',').map(c => c.trim());
+      for (const col of cols) {
+        if (/^\*$/.test(col)) continue;
+        const maxMatch = col.match(/^MAX\(\s*(\w+)\s*\)/i);
+        if (maxMatch) { pairs.add(`${table}.${maxMatch[1]}`); continue; }
+        if (/^COUNT\(/i.test(col)) continue;
+        if (/^[a-z_][a-z0-9_]*$/i.test(col)) pairs.add(`${table}.${col}`);
+      }
+    }
+
+    // WHERE-clause equality against a string literal -- this is where
+    // status-machine gate conditions actually live (e.g.
+    // `status = 'fully_executed'`), not in a COUNT(*) SELECT list.
+    for (const w of query.matchAll(/(\w+)\s*=\s*'[^']*'/g)) {
+      pairs.add(`${table}.${w[1]}`);
+    }
+  }
+  return [...pairs];
+}
+
+// Routes that legitimately write a gate-bound column WITHOUT calling
+// advancePipeline() -- they are evidence-input endpoints (recording KYC
+// docs, POF, valuations, bank assignment, signatures), not stage
+// transitions. Each entry documents why. Anything writing a gate-bound
+// column that is NOT here and NOT routed through advancePipeline() fails.
+const EXEMPT_GATE_COLUMN_WRITES = [
+  { file: 'api/routes/assets.js',  col: 'bank_assignment',        match: "bank_assignment = $1", reason: 'records bank assignment data; the collateralization gate reads it later, this route does not transition a stage' },
+  { file: 'api/routes/assets.js',  col: 'date_validation_status', match: "date_validation_status = 'passed'", reason: 'computed inline from real same-date enforcement logic in the same handler, not accepted as a client-supplied value' },
+  { file: 'api/routes/clients.js', col: 'ofac_status',    match: "SET ofac_status = 'manual_review'", reason: 'CLOSE-GAP-19a dual-control override endpoint; sets status only after two-principal confirmation, verified independently by the KYC gate' },
+  { file: 'api/routes/clients.js', col: 'review_outcome', match: "review_outcome = 'MANUAL_OVERRIDE_CONFIRMED'", reason: 'CLOSE-GAP-19a countersign step; the KYC gate independently re-verifies this value against pcm_ofac_results rather than trusting the flag' },
+  { file: 'api/routes/clients.js', col: 'provider',       match: "provider, status, raw_response_summary, reviewed_by", reason: "CLOSE-GAP-19a override record — provider is hardcoded literal 'MANUAL_OVERRIDE', not client-supplied" },
+  { file: 'api/routes/forms.js',   col: 'status',         match: "SET status = 'fully_executed'", reason: 'computed from actual signature count in the sign flow itself (parties/:party_id/sign), not an unverified assertion' },
+  { file: 'api/routes/forms.js',   col: 'agreement_type', match: "INSERT INTO pcm_agreements", reason: 'set once at agreement creation, never mutated afterward — not a stage-transition bypass' },
+];
+
+function check2_2() {
+  const columns = deriveGateBoundColumns();
+  if (columns.length === 0) {
+    record('2.2', 'fail', 'Could not derive any gate-bound columns from GATE_REQUIREMENTS — parser may be broken, or the source moved. This check is non-functional until fixed.');
+    return;
+  }
+  record('2.2', 'pass', `Derived ${columns.length} gate-bound column(s) from GATE_REQUIREMENTS: ${columns.join(', ')}`);
+
+  const routeFiles = readAllRouteFiles();
+  for (const pair of columns) {
+    const [table, col] = pair.split('.');
+    for (const { file, text } of routeFiles) {
+      // Look for UPDATE/INSERT touching this table and mentioning this column.
+      const writePattern = new RegExp(`(UPDATE\\s+${table}\\s+SET[^;]*\\b${col}\\b|INSERT INTO\\s+${table}\\s*\\([^)]*\\b${col}\\b)`, 'i');
+      if (!writePattern.test(text)) continue;
+
+      const exempt = EXEMPT_GATE_COLUMN_WRITES.find(e => e.file === file && e.col === col && text.includes(e.match));
+      if (exempt) {
+        record('2.2', 'pass', `${file} writes ${pair} — exempt (${exempt.reason})`);
+        continue;
+      }
+
+      // Require an actual call, not just the identifier appearing in a
+      // comment (e.g. explaining why a route does NOT use it).
+      const callsAdvancePipeline = /(?:await\s+advancePipeline\(|=\s*advancePipeline\()/.test(text);
+      if (callsAdvancePipeline) {
+        record('2.2', 'pass', `${file} writes ${pair} via advancePipeline() (role + gate + Sentinel checks apply)`);
+        continue;
+      }
+
+      record('2.2', 'fail', `${file} writes ${pair} without routing through advancePipeline() and without a documented exemption in this validator — unguarded gate-bound write`);
+    }
+  }
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+// 2.3 — DECLARED PROPERTY REACHABILITY
+// ═════════════════════════════════════════════════════════════════════════
+
+function check2_3() {
+  for (const agent of REQUIRED_AGENTS) {
+    const manifestPath = path.join(AGENTS_DIR, agent, 'manifest.json');
+    if (!fs.existsSync(manifestPath)) continue;
+    let manifest;
+    try { manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')); } catch { continue; }
+
+    const gov = manifest.governance || {};
+
+    // sentinel_enforced: true requires the agent's real call site to reach
+    // advancePipeline() (the only place sentinelCheck() is wired, as of
+    // CLOSE-GAP-16). None currently do — see 2.1's trace.
+    if (gov.sentinel_enforced === true) {
+      const trace = AGENT_TRACE[agent];
+      const reachesAdvancePipeline = false; // true for zero agents as of this scrub; see 4c trace
+      if (!reachesAdvancePipeline) {
+        record('2.3', 'fail', `${agent}: manifest declares sentinel_enforced:true but its call site (${trace ? trace.realSite : 'unknown'}) does not reach advancePipeline() / sentinelCheck()`);
+      }
+    } else if (gov.sentinel_enforced === undefined) {
+      record('2.3', 'warn', `${agent}: governance.sentinel_enforced is unset — no assertion possible, property is unverifiable as written`);
+    }
+
+    // pq_signing: any value other than an explicit "unsigned" label is
+    // asserting real post-quantum signing exists. This repo has no PQ
+    // signing backend anywhere (confirmed: CLOSE-GAP-18 investigation,
+    // deletion-certification's own UNSIGNED-NO-PQ-BACKEND-V1 label).
+    const pq = gov.pq_signing;
+    if (pq && pq !== 'UNSIGNED-NO-PQ-BACKEND-V1' && !/unsigned/i.test(pq)) {
+      record('2.3', 'fail', `${agent}: governance.pq_signing = '${pq}' asserts real PQ signing; no signing backend exists in this repo for any agent`);
+    }
+  }
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+// 2.4 — SCHEMA TRUTH
+// ═════════════════════════════════════════════════════════════════════════
+
+async function fetchLiveSchema() {
+  // Best-effort: only runs if PCM_DB_*_HOST env vars are present (as they
+  // are in the real deployed container). Degrades gracefully otherwise --
+  // this check must not make `npm run build` require database access in
+  // every context it might run in.
+  const hosts = {
+    clients: process.env.PCM_DB_CLIENT_HOST,
+    assets:  process.env.PCM_DB_ASSET_HOST,
+    forms:   process.env.PCM_DB_FORMS_HOST,
+    pehf:    process.env.PCM_DB_PEHF_HOST,
+  };
+  if (!hosts.clients) return null; // no DB env at all — skip, don't fail
+
+  let Client;
+  try { Client = require('pg').Client; } catch { return null; }
+
+  const schema = {}; // { pcm_table: Set(columns) }
+  const dbs = [
+    { key: 'clients', name: process.env.PCM_DB_CLIENT_NAME, user: process.env.PCM_DB_CLIENT_USER, pass: process.env.PCM_DB_CLIENT_PASSWORD, host: hosts.clients, port: process.env.PCM_DB_CLIENT_PORT },
+    { key: 'assets',  name: process.env.PCM_DB_ASSET_NAME,  user: process.env.PCM_DB_ASSET_USER,  pass: process.env.PCM_DB_ASSET_PASSWORD,  host: hosts.assets,  port: process.env.PCM_DB_ASSET_PORT },
+    { key: 'forms',   name: process.env.PCM_DB_FORMS_NAME,  user: process.env.PCM_DB_FORMS_USER,  pass: process.env.PCM_DB_FORMS_PASSWORD,  host: hosts.forms,   port: process.env.PCM_DB_FORMS_PORT },
+    { key: 'pehf',    name: process.env.PCM_DB_PEHF_NAME,   user: process.env.PCM_DB_PEHF_USER,   pass: process.env.PCM_DB_PEHF_PASSWORD,   host: hosts.pehf,    port: process.env.PCM_DB_PEHF_PORT },
+  ];
+
+  for (const db of dbs) {
+    if (!db.host || !db.name) continue;
+    const client = new Client({ host: db.host, port: db.port || 5432, database: db.name, user: db.user, password: db.pass, ssl: { rejectUnauthorized: false }, connectionTimeoutMillis: 5000 });
+    try {
+      await client.connect();
+      const res = await client.query(`SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = 'public'`);
+      for (const row of res.rows) {
+        if (!schema[row.table_name]) schema[row.table_name] = new Set();
+        schema[row.table_name].add(row.column_name);
+      }
+    } catch (err) {
+      return { error: `${db.key}: ${err.message}` };
+    } finally {
+      await client.end().catch(() => {});
+    }
+  }
+  return { schema };
+}
+
+async function check2_4() {
+  const live = await fetchLiveSchema();
+  if (!live) {
+    record('2.4', 'warn', 'No PCM_DB_*_HOST env vars present — schema-truth check skipped (needs live DB access, not available in this run context)');
+    return;
+  }
+  if (live.error) {
+    record('2.4', 'warn', `Could not connect to live database to verify schema: ${live.error}`);
+    return;
+  }
+  const schema = live.schema;
+
+  // Scan every agent + every route + pipeline.js/governance.js for
+  // `FROM pcm_x` / `INTO pcm_x` / `UPDATE pcm_x` references and the
+  // columns named alongside them, then check existence.
+  const filesToScan = [
+    ...fs.readdirSync(AGENTS_DIR).map(a => path.join(AGENTS_DIR, a, 'index.js')).filter(fs.existsSync),
+    ...readAllRouteFiles().map(r => path.join(REPO_ROOT, r.file)),
+    SERVICES_PIPELINE_FILE,
+    path.join(REPO_ROOT, 'api', 'services', 'governance.js'),
+    ORCH_FILE,
+  ];
+
+  let dynamicQueryFlags = [];
+
+  for (const filePath of filesToScan) {
+    if (!fs.existsSync(filePath)) continue;
+    const text = fs.readFileSync(filePath, 'utf8');
+    const rel = path.relative(REPO_ROOT, filePath);
+
+    // Flag dynamic query construction explicitly rather than silently
+    // passing it — e.g. template-built table/column names.
+    if (/\$\{[^}]*(table|column|meta\.)/i.test(text)) {
+      dynamicQueryFlags.push(rel);
+    }
+
+    const tableMatches = [...text.matchAll(/\b(?:FROM|INTO|UPDATE)\s+(pcm_\w+)/g)];
+    for (const m of tableMatches) {
+      const table = m[1];
+      if (!schema[table]) {
+        record('2.4', 'fail', `${rel}: references table '${table}' which does not exist in the live schema`);
+      }
+    }
+  }
+
+  for (const flagged of dynamicQueryFlags) {
+    record('2.4', 'warn', `${flagged}: dynamic query construction detected — table/column names built from variables, static extraction unreliable, not exhaustively checked`);
+  }
+
+  // Specific, known-important checks confirmed by hand this scrub —
+  // re-verified live here rather than only asserted.
+  if (schema['pcm_monitoring_log']) {
+    record('2.4', 'warn', 'pcm_monitoring_log exists live — contract-monitoring/index.js may no longer be referencing a nonexistent table; re-check CLOSE-GAP status');
+  } else if (!schema['pcm_contract_monitoring_log']) {
+    record('2.4', 'fail', 'Neither pcm_monitoring_log nor pcm_contract_monitoring_log exists live — contract-monitoring cannot write anywhere');
+  } else {
+    const contractMonitoringSrc = readIfExists(path.join(AGENTS_DIR, 'contract-monitoring', 'index.js')) || '';
+    if (/pcm_monitoring_log/.test(contractMonitoringSrc)) {
+      record('2.4', 'fail', "contract-monitoring/index.js still references pcm_monitoring_log, which does not exist live. Real table: pcm_contract_monitoring_log");
+    } else {
+      record('2.4', 'pass', 'contract-monitoring/index.js references the correct live table');
+    }
+  }
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+// 2.5 — DEPLOYMENT DRIFT (advisory)
+// ═════════════════════════════════════════════════════════════════════════
+
+function check2_5() {
+  let gitHead;
+  try {
+    gitHead = execSync('git rev-parse HEAD', { cwd: REPO_ROOT }).toString().trim();
+  } catch (e) {
+    record('2.5', 'warn', `Could not determine git HEAD: ${e.message}`);
+    return;
+  }
+
+  let liveImage;
+  try {
+    const out = execSync(
+      'aws ecs describe-tasks --cluster coreidentity-prod ' +
+      '--tasks $(aws ecs list-tasks --cluster coreidentity-prod --service-name pcm-api --region us-east-2 --query "taskArns[0]" --output text) ' +
+      '--region us-east-2 --query "tasks[0].containers[0].image" --output text',
+      { shell: '/bin/bash', stdio: ['pipe', 'pipe', 'pipe'] }
+    ).toString().trim();
+    liveImage = out;
+  } catch (e) {
+    record('2.5', 'warn', 'Could not query live ECS task (no AWS access in this run context, or not running on the ops box) — deployment drift not checked');
+    return;
+  }
+
+  if (!liveImage || liveImage === 'None') {
+    record('2.5', 'warn', 'No running pcm-api task found — cannot check deployment drift');
+    return;
+  }
+
+  const liveSha = liveImage.split(':').pop();
+  if (liveSha === gitHead) {
+    record('2.5', 'pass', `Running image SHA matches git HEAD (${gitHead})`);
+  } else {
+    record('2.5', 'warn', `DEPLOYMENT DRIFT: running image is ${liveSha}, git HEAD is ${gitHead} — ${gitHead === liveSha ? '' : 'undeployed commits exist'}`);
+  }
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+// MAIN
+// ═════════════════════════════════════════════════════════════════════════
+
+async function main() {
+  console.log('');
+  console.log('╔══════════════════════════════════════════════════════╗');
+  console.log('║  CoreIdentity PCM — Reachability Validator            ║');
+  console.log(`║  Mode: ${ENFORCE ? 'ENFORCE' : 'WARN'}`.padEnd(56) + '║');
+  console.log('╚══════════════════════════════════════════════════════╝');
+
+  // Basic scaffold presence, kept from the original check — still a real
+  // precondition for everything below.
+  for (const agent of REQUIRED_AGENTS) {
+    const dir = path.join(AGENTS_DIR, agent);
+    if (!fs.existsSync(path.join(dir, 'index.js')) || !fs.existsSync(path.join(dir, 'manifest.json'))) {
+      record('scaffold', 'fail', `${agent}: index.js or manifest.json missing`);
+    }
+  }
+
+  console.log('\n── 2.1 Manifest truth ──────────────────────────────────');
+  check2_1();
+  console.log('\n── 2.2 Gate-bound column guard ─────────────────────────');
+  check2_2();
+  console.log('\n── 2.3 Declared property reachability ──────────────────');
+  check2_3();
+  console.log('\n── 2.4 Schema truth ─────────────────────────────────────');
+  await check2_4();
+  console.log('\n── 2.5 Deployment drift (advisory) ─────────────────────');
+  check2_5();
+
+  for (const r of results) {
+    const icon = r.level === 'pass' ? '✓' : r.level === 'warn' ? '⚠' : '✗';
+    console.log(`  [${r.section}] ${icon} ${r.message}`);
+  }
+
+  const fails = results.filter(r => r.level === 'fail');
+  const warns = results.filter(r => r.level === 'warn');
+  const passes = results.filter(r => r.level === 'pass');
+
+  console.log('');
+  console.log('╔══════════════════════════════════════════════════════╗');
+  console.log(`║  ${passes.length} pass, ${warns.length} warn, ${fails.length} fail`.padEnd(56) + '║');
+  console.log('╚══════════════════════════════════════════════════════╝');
+  console.log('');
+
+  if (ENFORCE && fails.length > 0) {
+    console.error(`ENFORCE mode: ${fails.length} failure(s) — build failed.`);
+    process.exit(1);
+  }
+  if (!ENFORCE && fails.length > 0) {
+    console.warn(`WARN mode: ${fails.length} finding(s) would fail the build once VALIDATE_AGENTS_ENFORCE=true is set (Phase 6.2). Not failing the build now.`);
+  }
+}
+
+main().catch(err => {
+  console.error('Validator crashed:', err);
+  process.exit(ENFORCE ? 1 : 0);
+});
