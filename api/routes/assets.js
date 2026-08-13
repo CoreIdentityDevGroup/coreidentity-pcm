@@ -67,9 +67,10 @@ router.post('/', authorize('trade_group_owner','program_manager','intake_officer
     );
 
 
-    // AUTO-TRIGGER: asset-classifier + bank-routing
+    // AUTO-TRIGGER: asset-classifier + bank-routing + instrument-integrity
     const _assetOrch = require(require('path').join(__dirname, '../../agent-orchestrator'));
     const _newAsset = result.rows[0];
+    const { instrument_type, isin, cusip, swift_mt_type, swift_raw_message } = req.body;
     Promise.resolve().then(async () => {
       const r1 = await _assetOrch.runAgent('asset-classifier', {
         client_id:      _newAsset.client_id,
@@ -91,6 +92,18 @@ router.post('/', authorize('trade_group_owner','program_manager','intake_officer
         triggered_by:   'auto'
       });
       console.log(JSON.stringify({ level:'info', message:'bank-routing done', status: r2.status }));
+      const r3 = await _assetOrch.runAgent('instrument-integrity', {
+        client_id:           _newAsset.client_id,
+        asset_id:            _newAsset.asset_id,
+        description:         _newAsset.description,
+        instrument_type,
+        isin,
+        cusip,
+        swift_mt_type,
+        swift_raw_message,
+        triggered_by:        'auto'
+      });
+      console.log(JSON.stringify({ level:'info', message:'instrument-integrity done', status: r3.status }));
     }).catch(err => console.error(JSON.stringify({ level:'error', message:'Asset auto-trigger error', error: err.message })));
 
     res.status(201).json(result.rows[0]);
@@ -253,6 +266,43 @@ router.post('/:id/valuations', authorize('trade_group_owner','program_manager','
        appraiser_organization, appraiser_license, appraisal_date, submission_date,
        date_validation_status, date_validation_notes, gcs_bucket, gcs_object_path]
     );
+
+    // AUTO-TRIGGER: valuation-parser + document-date-validator
+    const _valOrch = require(require('path').join(__dirname, '../../agent-orchestrator'));
+    const _newVal = result.rows[0];
+    Promise.resolve().then(async () => {
+      const assetRow = await db.assets.query(
+        `SELECT client_id, declared_value FROM pcm_assets WHERE asset_id = $1`, [req.params.id]
+      );
+      if (!assetRow.rows.length) return;
+      const { client_id, declared_value } = assetRow.rows[0];
+
+      const r1 = await _valOrch.runAgent('valuation-parser', {
+        asset_id:        req.params.id,
+        appraised_value: _newVal.appraised_value,
+        declared_value,
+        currency:        _newVal.currency,
+        appraiser_name:  _newVal.appraiser_name,
+        appraisal_date:  _newVal.appraisal_date,
+        triggered_by:    'auto'
+      });
+      console.log(JSON.stringify({ level:'info', message:'valuation-parser done', status: r1.status }));
+
+      const pofRow = await require('../services/db').clients.query(
+        `SELECT submission_date FROM pcm_pof_records
+         WHERE client_id = $1 AND vault_status = 'active'
+         ORDER BY submission_date DESC LIMIT 1`,
+        [client_id]
+      );
+      const r2 = await _valOrch.runAgent('document-date-validator', {
+        asset_id:        req.params.id,
+        appraisal_date:  _newVal.appraisal_date,
+        submission_date: _newVal.submission_date,
+        pof_date:        pofRow.rows[0]?.submission_date || null,
+        triggered_by:    'auto'
+      });
+      console.log(JSON.stringify({ level:'info', message:'document-date-validator done', status: r2.status }));
+    }).catch(err => console.error(JSON.stringify({ level:'error', message:'Valuation auto-trigger error', error: err.message })));
 
     res.status(201).json(result.rows[0]);
   } catch (err) { next(err); }

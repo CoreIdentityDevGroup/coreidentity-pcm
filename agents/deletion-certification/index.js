@@ -1,5 +1,7 @@
 'use strict';
 
+const crypto = require('crypto');
+
 async function execute(context) {
   const { client_id, asset_id, pipeline_reference, db } = context;
 
@@ -50,15 +52,26 @@ async function execute(context) {
     retention_period:       'permanent'
   };
 
-  // Store cert reference
+  // Store cert reference. NOTE: no post-quantum signing backend exists in this
+  // repo yet (manifest declares SLH-DSA-128s, but nothing implements it) — the
+  // signature column is filled with an explicitly-labeled placeholder rather
+  // than a fabricated value, so it reads as unsigned in any audit query.
   if (db) {
+    const certificate_hash = crypto.createHash('sha256')
+      .update(JSON.stringify(certificate)).digest('hex');
+
     await db.clients.query(
       `INSERT INTO pcm_deletion_certificates
-         (client_id, asset_id, cert_reference, issued_at, doc_count, cert_payload)
-       VALUES ($1, $2, $3, $4, $5, $6)
-       ON CONFLICT DO NOTHING`,
-      [client_id, asset_id, cert_id, issued_at, all_docs.length,
-       JSON.stringify(certificate)]
+         (client_id, asset_id, scope, deleted_object_count, deleted_object_paths,
+          deletion_timestamp, algorithm, certificate_hash, certificate_signature,
+          signing_agent_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+      [
+        client_id, asset_id, `client_and_asset_documents:${cert_id}`, all_docs.length,
+        all_docs.map(d => d.gcs_object_path).filter(Boolean),
+        issued_at, 'SLH-DSA-128s', certificate_hash,
+        'UNSIGNED-NO-PQ-BACKEND-V1', 'deletion-certification-agent'
+      ]
     );
   }
 
