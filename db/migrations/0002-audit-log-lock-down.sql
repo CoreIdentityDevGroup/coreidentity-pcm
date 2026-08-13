@@ -1,46 +1,59 @@
 -- Phase 3.5: pcm_agent_activity (the audit trail for every agent decision)
--- currently grants pcm_app UPDATE/DELETE/TRUNCATE with no triggers to
--- detect or prevent tampering. Committed to version control per
--- instruction regardless of whether/when this is applied to production --
--- the permissions model existing nowhere in git is its own finding.
+-- previously granted pcm_app UPDATE/DELETE/TRUNCATE with no triggers to
+-- detect or prevent tampering, and pcm_app OWNED the table -- meaning a
+-- REVOKE alone would not have held against a compromised pcm_app
+-- credential (an owner always has implicit GRANT OPTION on its own
+-- objects and can undo a REVOKE on itself in one statement -- verified
+-- locally before this was known to matter).
 --
--- STATUS AS OF 2026-08-13: tested on an isolated local database (Docker
--- postgres:16, schema reproduced from live \d output). NOT YET APPLIED TO
--- PRODUCTION -- stopped per explicit instruction to report and wait
--- before this specific change.
+-- APPLIED TO PRODUCTION 2026-08-13.
 --
--- Local test results:
---   - Exhaustive grep of the entire codebase found zero UPDATE/DELETE/
---     TRUNCATE statements against pcm_agent_activity anywhere. The table
---     is written exclusively by agent-orchestrator.js's runAgent() (one
---     INSERT, fire-and-forget) and read exclusively by api/routes/
---     activity.js (three SELECTs, no mutation). No dynamic/constructed
---     query path (api/routes/reference.js's dynamic table selector) can
---     reach this table -- its allowlist is 4 unrelated reference tables.
---   - Ran the exact INSERT from agent-orchestrator.js and the exact
---     SELECT from activity.js against the reduced-permission table:
---     both succeeded, before and after the REVOKE.
---   - Confirmed the REVOKE has real effect: direct UPDATE/DELETE/
---     TRUNCATE against the table all failed with "permission denied"
---     after applying it.
+-- Local test (Docker postgres:16, schema reproduced from live \d output,
+-- pcm_app created as owner to match production) before touching
+-- production:
+--   - Exhaustive grep of the codebase found zero UPDATE/DELETE/TRUNCATE
+--     statements against pcm_agent_activity anywhere. Table is written
+--     exclusively by agent-orchestrator.js's runAgent() (one INSERT,
+--     fire-and-forget) and read exclusively by api/routes/activity.js
+--     (three SELECTs). No dynamic-query path can reach this table.
+--   - Ran the real INSERT/SELECT against the reduced-permission table:
+--     both succeeded, before and after a REVOKE-only test.
+--   - Confirmed a REVOKE-only approach has real effect against direct
+--     UPDATE/DELETE/TRUNCATE, but also confirmed pcm_app (as owner)
+--     could trivially self-restore it with one GRANT statement --
+--     reported to the user as a materially weaker guarantee than a
+--     REVOKE might be assumed to provide.
 --
--- IMPORTANT CAVEAT FOUND DURING TESTING, not assumed from the spec text:
--- pcm_app is the OWNER of pcm_agent_activity in production (confirmed
--- live: tableowner = pcm_app), not merely a grantee. Table ownership in
--- Postgres always implicitly carries GRANT OPTION on the object. Tested
--- locally: after applying this exact REVOKE, pcm_app was able to fully
--- restore its own DELETE privilege with a single
--- `GRANT DELETE ON pcm_agent_activity TO pcm_app;` statement, using
--- nothing but its normal application credentials, and then successfully
--- performed a DELETE. This means the REVOKE below stops accidental or
--- buggy application code from mutating the audit trail, but provides
--- close to zero protection against a compromised pcm_app credential --
--- an attacker with that password can undo it in one statement. A REVOKE
--- that actually holds against a compromised app credential requires
--- transferring ownership of this table to a different role first (e.g.
--- pcm_admin), then granting pcm_app only INSERT/SELECT -- a larger,
--- more consequential change than what was scoped for this pass. Flagging
--- this distinction explicitly rather than letting the REVOKE below be
--- read as a stronger guarantee than it is.
+-- User directed both the REVOKE and an ownership transfer to pcm_admin
+-- (which already exists -- master_user in Secrets Manager, member of
+-- rds_superuser and of pcm_app, already used for direct DB
+-- administration per its own secret description), so the lock-down holds
+-- even against a compromised pcm_app credential, and to do it now while
+-- the table has near-zero rows and no meaningful live traffic.
+--
+-- SELF-CORRECTED DURING PRODUCTION APPLICATION, documented rather than
+-- omitted: the ownership-transfer step itself was not dry-run locally
+-- (only the REVOKE-only variant was). ALTER TABLE ... OWNER TO pcm_admin
+-- turned out to strip ALL of pcm_app's access, not just UPDATE/DELETE/
+-- TRUNCATE -- pcm_app's privileges had never been explicit grants, only
+-- the implicit "owner has everything" default, which vanishes entirely
+-- (not partially) once ownership moves. This briefly left pcm_app with
+-- zero access to the table in production. Caught immediately via a live
+-- query against information_schema.role_table_grants (not assumed) and
+-- corrected within the same operation by granting back exactly INSERT +
+-- SELECT -- the only two privileges any code path actually uses. Re-ran
+-- the real INSERT/SELECT/blocked-UPDATE/blocked-DELETE checks live,
+-- against production, using the actual application queries, after the
+-- correction. Checked /ecs/coreidentity-prod-pcm-api logs for the
+-- surrounding 20-minute window: zero permission-denied or
+-- pcm_agent_activity errors -- no live traffic appears to have hit the
+-- gap. Final verified state: pcm_admin owns the table with full
+-- privileges; pcm_app holds exactly INSERT + SELECT; UPDATE/DELETE/
+-- TRUNCATE against the table as pcm_app fail with "permission denied",
+-- confirmed live.
 
+ALTER TABLE pcm_agent_activity OWNER TO pcm_admin;
 REVOKE UPDATE, DELETE, TRUNCATE ON pcm_agent_activity FROM pcm_app;
+-- Ownership transfer strips ALL prior implicit privileges, not just the
+-- ones being revoked -- re-grant exactly what application code needs.
+GRANT INSERT, SELECT ON pcm_agent_activity TO pcm_app;
