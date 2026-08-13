@@ -19,6 +19,10 @@ const COREIDENTITY_API_KEY = process.env.COREIDENTITY_API_KEY;
 // must be provisioned as the same value Sentinel's own JWT_SECRET resolves
 // to, or every call will 401.
 const SENTINEL_JWT_SECRET = process.env.SENTINEL_JWT_SECRET;
+// CLOSE-GAP-15: hard timeout for the Sentinel call specifically. Default 3s --
+// short enough that a stalled dependency can't wedge a pipeline-advance
+// request behind it, long enough to not misfire against normal network jitter.
+const SENTINEL_TIMEOUT_MS = parseInt(process.env.SENTINEL_TIMEOUT_MS, 10) || 3000;
 
 function mintSentinelToken() {
   if (!SENTINEL_JWT_SECRET) {
@@ -31,7 +35,7 @@ function mintSentinelToken() {
   );
 }
 
-function makeRequest(urlStr, method, body, headers = {}) {
+function makeRequest(urlStr, method, body, headers = {}, timeoutMs = 0) {
   return new Promise((resolve) => {
     const parsed  = new URL(urlStr);
     const lib     = parsed.protocol === 'https:' ? https : http;
@@ -42,6 +46,7 @@ function makeRequest(urlStr, method, body, headers = {}) {
       port:     parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
       path:     parsed.pathname + parsed.search,
       method,
+      ...(timeoutMs > 0 ? { timeout: timeoutMs } : {}),
       headers: {
         'Content-Type': 'application/json',
         ...(COREIDENTITY_API_KEY ? { 'X-API-Key': COREIDENTITY_API_KEY } : {}),
@@ -50,16 +55,39 @@ function makeRequest(urlStr, method, body, headers = {}) {
       }
     };
 
+    let settled = false;
+
     const req = lib.request(options, (res) => {
       let data = '';
       res.on('data', chunk => { data += chunk; });
       res.on('end', () => {
+        if (settled) return;
+        settled = true;
         try { resolve({ status: res.statusCode, body: JSON.parse(data) }); }
         catch { resolve({ status: res.statusCode, body: data }); }
       });
     });
 
+    // CLOSE-GAP-15: Node's `timeout` request option fires this event on
+    // socket inactivity but does NOT itself abort the request -- req.destroy()
+    // is required, or the socket (and this Promise) would otherwise still
+    // resolve/hang on whatever happens next. timedOut:true is the signal
+    // callers use to distinguish "no response in time" from a connection
+    // error or a real non-200 response.
+    req.on('timeout', () => {
+      if (settled) return;
+      settled = true;
+      req.destroy(new Error('request timed out'));
+      console.error(JSON.stringify({
+        level: 'error', message: 'Governance request timed out',
+        url: urlStr, timeoutMs
+      }));
+      resolve({ status: 0, body: { error: 'timeout' }, timedOut: true });
+    });
+
     req.on('error', (err) => {
+      if (settled) return;
+      settled = true;
       console.error(JSON.stringify({
         level: 'error', message: 'Governance request failed',
         error: err.message, url: urlStr
@@ -138,7 +166,8 @@ async function sentinelCheck(action, resource, context = {}) {
       `${SENTINEL_URL}/api/sentinel/evaluate`,
       'POST',
       { action, resource, context, platform: 'CoreG-PCM' },
-      authHeaders
+      authHeaders,
+      SENTINEL_TIMEOUT_MS
     );
 
     if (result.status === 200) {
@@ -147,6 +176,18 @@ async function sentinelCheck(action, resource, context = {}) {
         decision: result.body?.decision || 'UNKNOWN',
         reason:   result.body?.reason   || null
       };
+    }
+
+    if (result.timedOut) {
+      // CLOSE-GAP-15: distinguishable from BLOCK_SENTINEL_UNAVAILABLE below --
+      // this is "Sentinel didn't answer in time," not "the connection failed."
+      console.error(JSON.stringify({
+        level: 'error',
+        message: 'Sentinel timed out — FAIL CLOSE — action blocked',
+        action, resource, timeout_ms: SENTINEL_TIMEOUT_MS,
+        timestamp: new Date().toISOString()
+      }));
+      return { allowed: false, decision: 'BLOCK_SENTINEL_TIMEOUT', reason: `Sentinel did not respond within ${SENTINEL_TIMEOUT_MS}ms — action blocked per fail-close policy` };
     }
 
     // Sentinel unreachable — FAIL CLOSE — block action

@@ -2,6 +2,25 @@
 
 const { execSync } = require('child_process');
 
+// CLOSE-GAP-15: runAgent() previously had no timeout around
+// agent.execute() -- an agent stuck on a query or outbound call hung
+// runAgent() forever instead of producing a definite error. Promise.race()
+// bounds how long runAgent() itself can hang; it does not cancel the
+// agent's in-flight work (Node has no general cancellation for arbitrary
+// async code, and no AbortSignal is threaded through agent.execute()
+// implementations) -- that work keeps running in the background after
+// this rejects. Still strictly better than an indefinite hang with no
+// caller-visible outcome at all.
+const AGENT_TIMEOUT_MS = parseInt(process.env.PCM_AGENT_TIMEOUT_MS, 10) || 15000;
+
+function withTimeout(promise, ms, label) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 // Load AIS agent keys from Secrets Manager at startup
 let aisKeys = null;
 function getAisKeys() {
@@ -34,7 +53,8 @@ const agents = {
   'token-minting':            require('./agents/token-minting'),
   'deletion-certification':   require('./agents/deletion-certification'),
   'contract-monitoring':      require('./agents/contract-monitoring'),
-  'transaction-monitoring':   require('./agents/transaction-monitoring')
+  'transaction-monitoring':   require('./agents/transaction-monitoring'),
+  'instrument-integrity':     require('./agents/instrument-integrity')
 };
 
 async function runAgent(name, context) {
@@ -58,7 +78,7 @@ async function runAgent(name, context) {
   }));
 
   try {
-    const result = await agent.execute({ ...context, db });
+    const result = await withTimeout(agent.execute({ ...context, db }), AGENT_TIMEOUT_MS, `Agent ${name}`);
     const duration_ms = Date.now() - start;
     console.log(JSON.stringify({
       level: 'info',
@@ -143,4 +163,23 @@ async function runMonitoringCycle() {
   return results;
 }
 
-module.exports = { runAgent, runMonitoringCycle };
+// contract-monitoring ("continuous") and transaction-monitoring ("stage_6_gate")
+// have no discrete route event to hook — they poll state instead. Without this,
+// runMonitoringCycle is only reachable via the manual POST /api/v1/agents/monitoring
+// endpoint and never fires on its own.
+let _monitoringTimer = null;
+function startMonitoringSchedule(intervalMs = parseInt(process.env.PCM_MONITORING_INTERVAL_MS || '900000', 10)) {
+  if (_monitoringTimer) return _monitoringTimer;
+  _monitoringTimer = setInterval(() => {
+    runMonitoringCycle().catch(err => console.error(JSON.stringify({
+      level: 'error', message: 'Scheduled monitoring cycle failed', error: err.message
+    })));
+  }, intervalMs);
+  _monitoringTimer.unref();
+  console.log(JSON.stringify({
+    level: 'info', message: 'Monitoring cycle schedule started', interval_ms: intervalMs
+  }));
+  return _monitoringTimer;
+}
+
+module.exports = { runAgent, runMonitoringCycle, startMonitoringSchedule };
