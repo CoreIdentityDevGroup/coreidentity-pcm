@@ -13,6 +13,15 @@
     "validate:db": "node scripts/validate-schemas.js",
     "test": "jest --forceExit"
   },
+  "jest": {
+    "testEnvironment": "node",
+    "setupFiles": [
+      "<rootDir>/tests/env.setup.js"
+    ],
+    "testMatch": [
+      "<rootDir>/tests/**/*.test.js"
+    ]
+  },
   "dependencies": {
     "@aws-sdk/client-cloudwatch": "^3.967.0",
     "@google-cloud/secret-manager": "^5.0.1",
@@ -32,7 +41,8 @@
   },
   "devDependencies": {
     "jest": "^29.7.0",
-    "nodemon": "^3.0.2"
+    "nodemon": "^3.0.2",
+    "supertest": "^7.2.2"
   },
   "engines": {
     "node": ">=22.0.0"
