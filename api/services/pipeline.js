@@ -1,6 +1,7 @@
 'use strict';
 
-const db = require('./db');
+const db         = require('./db');
+const governance = require('./governance');
 
 // ─── PIPELINE STAGE DEFINITIONS ───────────────────────────────────────────────
 const STAGES = {
@@ -252,9 +253,10 @@ async function advancePipeline({ asset_id, client_id, to_stage, user, notes }) {
     return { success: false, code: 422, error: 'Gate requirements not met', block_reason: 'blocked_pending', gate_errors: gateErrors };
   }
 
-  // 3. Get current stages
+  // 3. Get current stages (moved ahead of the Sentinel check below so
+  //    pipeline_reference is available in its context)
   const asset = await db.assets.query(
-    `SELECT pipeline_stage FROM pcm_assets WHERE asset_id = $1`, [asset_id]
+    `SELECT pipeline_stage, pipeline_reference FROM pcm_assets WHERE asset_id = $1`, [asset_id]
   );
   const client = await db.clients.query(
     `SELECT pipeline_stage FROM pcm_clients WHERE client_id = $1 AND deleted_at IS NULL`, [client_id]
@@ -264,6 +266,37 @@ async function advancePipeline({ asset_id, client_id, to_stage, user, notes }) {
   if (!client.rows.length) return { success: false, code: 404, error: 'Client not found' };
 
   const from_stage = asset.rows[0].pipeline_stage;
+
+  // CLOSE-GAP-16: Sentinel enforcement gate, fail-closed. Runs after the
+  // local checks above (role authority, gate requirements) and before any
+  // state mutation below. BLOCK_SENTINEL_UNAVAILABLE / BLOCK_SENTINEL_ERROR
+  // / BLOCK_SENTINEL_TIMEOUT (the policy engine could not be reached or
+  // did not answer -- see CLOSE-GAP-14/15) map to block_reason
+  // 'blocked_unavailable', distinguishable from a real Sentinel BLOCK
+  // decision (block_reason 'blocked_pending', same bucket as unmet gate
+  // requirements: the system answered, the answer was no).
+  const sentinelResult = await governance.sentinelCheck(
+    `PIPELINE_ADVANCE.${to_stage.toUpperCase()}`,
+    `pcm:asset:${asset_id}`,
+    {
+      client_id,
+      pipeline_reference: asset.rows[0].pipeline_reference,
+      from_stage, to_stage,
+      transitioned_by: user.sub || 'system'
+    }
+  );
+  if (!sentinelResult.allowed) {
+    const dependencyDown = sentinelResult.decision === 'BLOCK_SENTINEL_UNAVAILABLE'
+                         || sentinelResult.decision === 'BLOCK_SENTINEL_ERROR'
+                         || sentinelResult.decision === 'BLOCK_SENTINEL_TIMEOUT';
+    return {
+      success: false,
+      code: dependencyDown ? 503 : 403,
+      error: sentinelResult.reason || 'Blocked by Sentinel policy',
+      block_reason: dependencyDown ? 'blocked_unavailable' : 'blocked_pending',
+      sentinel_decision: sentinelResult.decision
+    };
+  }
 
   // 4. Advance both asset and client
   const [updated_asset] = await Promise.all([
