@@ -169,7 +169,18 @@ const GATE_REQUIREMENTS = {
     const errors = [];
     if (!asset.rows[0]?.token_id) errors.push('No classification token minted for this asset');
     return errors;
-  }
+  },
+
+  // CLOSE-GAP-21: 'rejected' and 'on_hold' are administrative/terminal
+  // stages, not forward-progress gates -- there is no data precondition
+  // to check the way kyc_verification/appraisal_review/etc. gate forward
+  // movement on evidence. checkRoleAuthority() is the real control for
+  // both. Explicit always-pass entries, not a silent gap: before this,
+  // the absence of any entry made validateGate() throw (CLOSE-GAP-12-C1's
+  // own "no gate definition = block" rule), which made every call to
+  // POST /pipeline/reject and POST /pipeline/hold 422 unconditionally.
+  rejected: async () => [],
+  on_hold:  async () => []
 };
 
 // ─── VALIDATE GATE ────────────────────────────────────────────────────────────

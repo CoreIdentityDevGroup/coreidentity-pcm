@@ -180,6 +180,24 @@ router.post('/verify-instrument', authorize('program_manager','trade_group_owner
       return res.status(409).json({ error: 'Asset already verified — no action taken' });
     }
 
+    // CLOSE-GAP-21: 'verified' must never be reachable with zero
+    // instrument-integrity screening history. The agent only ever writes
+    // 'blocked' or 'pending_human_verification' on completion (never
+    // 'verified' itself) -- a row existing is the correct terminality
+    // check. 'blocked' is left unrestricted: a human should be able to
+    // proactively hold a suspicious asset without prior agent history.
+    if (decision === 'verified') {
+      const priorResult = await db.assets.query(
+        `SELECT id FROM pcm_instrument_integrity_results WHERE asset_id = $1 ORDER BY created_at DESC LIMIT 1`,
+        [asset_id]
+      );
+      if (!priorResult.rows.length) {
+        return res.status(422).json({
+          error: 'Cannot verify — no instrument-integrity screening result on file for this asset'
+        });
+      }
+    }
+
     const reviewedBy = req.user?.sub || req.user?.email || 'unknown_reviewer';
 
     await db.assets.query(
