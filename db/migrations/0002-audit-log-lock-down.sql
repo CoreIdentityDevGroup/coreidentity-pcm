@@ -1,0 +1,46 @@
+-- Phase 3.5: pcm_agent_activity (the audit trail for every agent decision)
+-- currently grants pcm_app UPDATE/DELETE/TRUNCATE with no triggers to
+-- detect or prevent tampering. Committed to version control per
+-- instruction regardless of whether/when this is applied to production --
+-- the permissions model existing nowhere in git is its own finding.
+--
+-- STATUS AS OF 2026-08-13: tested on an isolated local database (Docker
+-- postgres:16, schema reproduced from live \d output). NOT YET APPLIED TO
+-- PRODUCTION -- stopped per explicit instruction to report and wait
+-- before this specific change.
+--
+-- Local test results:
+--   - Exhaustive grep of the entire codebase found zero UPDATE/DELETE/
+--     TRUNCATE statements against pcm_agent_activity anywhere. The table
+--     is written exclusively by agent-orchestrator.js's runAgent() (one
+--     INSERT, fire-and-forget) and read exclusively by api/routes/
+--     activity.js (three SELECTs, no mutation). No dynamic/constructed
+--     query path (api/routes/reference.js's dynamic table selector) can
+--     reach this table -- its allowlist is 4 unrelated reference tables.
+--   - Ran the exact INSERT from agent-orchestrator.js and the exact
+--     SELECT from activity.js against the reduced-permission table:
+--     both succeeded, before and after the REVOKE.
+--   - Confirmed the REVOKE has real effect: direct UPDATE/DELETE/
+--     TRUNCATE against the table all failed with "permission denied"
+--     after applying it.
+--
+-- IMPORTANT CAVEAT FOUND DURING TESTING, not assumed from the spec text:
+-- pcm_app is the OWNER of pcm_agent_activity in production (confirmed
+-- live: tableowner = pcm_app), not merely a grantee. Table ownership in
+-- Postgres always implicitly carries GRANT OPTION on the object. Tested
+-- locally: after applying this exact REVOKE, pcm_app was able to fully
+-- restore its own DELETE privilege with a single
+-- `GRANT DELETE ON pcm_agent_activity TO pcm_app;` statement, using
+-- nothing but its normal application credentials, and then successfully
+-- performed a DELETE. This means the REVOKE below stops accidental or
+-- buggy application code from mutating the audit trail, but provides
+-- close to zero protection against a compromised pcm_app credential --
+-- an attacker with that password can undo it in one statement. A REVOKE
+-- that actually holds against a compromised app credential requires
+-- transferring ownership of this table to a different role first (e.g.
+-- pcm_admin), then granting pcm_app only INSERT/SELECT -- a larger,
+-- more consequential change than what was scoped for this pass. Flagging
+-- this distinction explicitly rather than letting the REVOKE below be
+-- read as a stronger guarantee than it is.
+
+REVOKE UPDATE, DELETE, TRUNCATE ON pcm_agent_activity FROM pcm_app;
