@@ -142,7 +142,11 @@ router.put('/:id', authorize('trade_group_owner','program_manager','intake_offic
 
 // ─── ACKNOWLEDGE RULES (client-portal action — compliance gate) ───────────────
 // The client themselves must acknowledge (client-auth token, role='client'), and
-// only for their OWN transaction — this is the compliance gate, not a staff action.
+// only for their OWN transaction. This sets rules_acknowledged, which
+// transaction-stages.js's PUT /:txId/stages/:stageNumber actually enforces
+// (blocks completing any stage until this is true) -- previously this flag
+// was set here but read nowhere, so calling it "the compliance gate" was
+// aspirational, not real. It's real as of the transaction-stages.js gating pass.
 router.post('/:id/acknowledge-rules', authorize('client'), async (req, res, next) => {
   try {
     const existing = await db.clients.query(
