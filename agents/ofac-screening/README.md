@@ -15,8 +15,8 @@ Heuristic pre-screen only -- matches client name/country against a hardcoded lis
 
 | Control | Value |
 |---------|-------|
-| AIS Identity | Required |
-| SAL Logging | Full |
+| AIS Identity | Not required (aisVerify() targets a nonexistent ais-api endpoint and is unreachable ESM code in this CJS repo; see manifest.json ais_required_reason) |
+| SAL Logging | None (sal-client.js is a stub with no real backend; see manifest.json sal_logging_reason) |
 | PQ Signing | UNSIGNED-NO-PQ-BACKEND-V1 |
 | Human Gate | Per pipeline stage |
 | Reversible Actions | Yes — no irreversible actions without human gate |

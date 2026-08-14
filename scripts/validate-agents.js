@@ -17,7 +17,7 @@
  * back to WARN mode for local iteration -- default WARN behavior no
  * longer ships silently.
  *
- * Eight checks, run in order:
+ * Nine checks, run in order:
  *   2.1 Manifest truth        — declared trigger vs. traced real call site
  *   2.2 Gate-bound column guard — derived from GATE_REQUIREMENTS itself
  *   2.3 Declared property reachability — sentinel_enforced, pq_signing
@@ -26,6 +26,11 @@
  *   2.6 Manifest external-source truth — claimed vs. actual external calls
  *   2.7 Gate allowlist/blocklist pattern
  *   2.8 State-machine adjacency (CLOSE-GAP-30 regression guard)
+ *   2.9 Universal governance-claim reachability guard — every governance
+ *       field must have a registered, checkable assertion; an unrecognized
+ *       or unreachable claim fails regardless of value (see 2.9's own
+ *       header comment below for why this exists as a general mechanism,
+ *       not another one-off field check like 2.3)
  */
 
 'use strict';
@@ -370,6 +375,179 @@ function check2_3() {
     const pq = gov.pq_signing;
     if (pq && pq !== 'UNSIGNED-NO-PQ-BACKEND-V1' && !/unsigned/i.test(pq)) {
       record('2.3', 'fail', `${agent}: governance.pq_signing = '${pq}' asserts real PQ signing; no signing backend exists in this repo for any agent`);
+    }
+  }
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+// 2.9 — UNIVERSAL GOVERNANCE-CLAIM REACHABILITY GUARD
+// ═════════════════════════════════════════════════════════════════════════
+//
+// 2026-08-14: four manifest fields have now been found asserting a
+// capability that wasn't actually reachable -- sentinel_enforced,
+// pq_signing (2026-06 SCRUB, see 2.3 above), then ais_required and
+// sal_logging (2026-08-14 fabricated-governance sweep). Four independent
+// instances of the same shape of defect, found by hand each time, is a
+// pattern: someone writes a check for the field they just found broken,
+// and the next field ships unverified until it's found by accident again.
+//
+// This makes that structurally impossible instead of just found: every
+// field in GOVERNANCE_CLAIM_FIELDS, wherever it appears in any manifest
+// (top-level or nested under `governance`), MUST have an entry in
+// GOVERNANCE_CLAIM_REGISTRY. A field with no registry entry FAILS
+// regardless of its value -- there is no default-pass for an unrecognized
+// governance claim. A field with a registry entry whose reachability
+// function reports unreachable also FAILS. Net effect: introducing a new
+// governance-shaped field, or flipping an existing one back to a
+// real-sounding value, breaks the build immediately unless a human adds or
+// updates a genuine, checkable reachability assertion here first -- it
+// can no longer just ship and wait to be found.
+//
+// GOVERNANCE_CLAIM_FIELDS seeds the registry with the 4 fields found
+// fabricated so far and gives them named, documented assertions below. The
+// scan itself (collectGovernanceFields) is NOT limited to this list --
+// it catches ANY boolean field found at the manifest top level or under
+// `governance`, named or not. A boolean with no registry entry FAILS,
+// same as a registered one that's unreachable. This is deliberate: while
+// building this check, human_gate_required and reversible_actions_only
+// (present on every agent, never read by any route/service/orchestrator
+// code -- confirmed by grep) turned out to be the same unenforced-claim
+// shape as the 4 known ones, just never investigated for truth. Rather
+// than guess whether their current per-agent values are honest, they are
+// deliberately left OUT of the registry, so the generic scan fails on
+// them until someone actually checks each agent's real behavior and adds
+// a genuine entry. That failure is the point, not a bug to silence.
+const GOVERNANCE_CLAIM_FIELDS = ['sentinel_enforced', 'pq_signing', 'ais_required', 'sal_logging'];
+
+// field name -> (value) => { reachable: bool, note: string }
+// An entry MUST exist here for every governance-shaped field the scan
+// finds. "reachable: false" is a valid, honest, currently-in-use entry
+// (below) -- what's not allowed is silence (no entry) for a field that's
+// present, which is exactly the state human_gate_required and
+// reversible_actions_only are in right now (see the comment above) --
+// they will fail 2.9 until a real entry is added.
+const GOVERNANCE_CLAIM_REGISTRY = {
+  sentinel_enforced: (value) => {
+    if (value !== true) return { reachable: true, note: 'not asserted true — nothing to verify' };
+    // No agent's real call site reaches advancePipeline()/sentinelCheck() as of this scrub (see 2.1/2.3).
+    return { reachable: false, note: 'sentinel_enforced:true has no known reachable call site (see 2.3)' };
+  },
+  pq_signing: (value) => {
+    if (!value || value === 'UNSIGNED-NO-PQ-BACKEND-V1' || /unsigned/i.test(value)) {
+      return { reachable: true, note: 'explicit unsigned label — nothing to verify' };
+    }
+    return { reachable: false, note: 'no PQ signing backend exists in this repo for any agent (see 2.3)' };
+  },
+  ais_required: (value) => {
+    if (value !== true) return { reachable: true, note: 'not asserted true — nothing to verify' };
+    return {
+      reachable: false,
+      note: 'aisVerify() (agents/shared/ais-client.js) targets a nonexistent ais-api /verify ' +
+            'endpoint and is unreachable ESM code in this CJS repo — see CLAIMS-INVENTORY.txt Addendum 5',
+    };
+  },
+  sal_logging: (value) => {
+    if (value === false || value === 'none') return { reachable: true, note: 'not asserted true — nothing to verify' };
+    return {
+      reachable: false,
+      note: 'salLog() (agents/shared/sal-client.js) is a stub with no real SAL backend — ' +
+            'see CLAIMS-INVENTORY.txt Addendum 5',
+    };
+  },
+  // 'unverified', not true/false: found by the generic scan while building
+  // this check (2026-08-14) -- never read by any route/service/orchestrator
+  // code (grep confirms zero call sites), the same unenforced-claim shape
+  // as the 4 fields above, but nobody has actually checked whether each
+  // agent's current per-agent value is honest (e.g. does instrument-integrity
+  // really require a human gate? does any agent take an irreversible action
+  // despite claiming reversible_actions_only:true?). Registering these as
+  // reachable:true would assert they're fine with no evidence; reachable:
+  // false would assert they're broken with no evidence -- both are guesses.
+  // 'unverified' downgrades checkManifestClaims's response to a WARN instead
+  // of a FAIL, so the whole repo's ENFORCE-mode build doesn't break over an
+  // unscoped discovery, while keeping it visible rather than silent. Tracked
+  // as an explicit follow-up in CLAIMS-INVENTORY.txt Addendum 5 -- replace
+  // this entry with a real true/false once each agent's actual behavior has
+  // been checked.
+  human_gate_required: () => ({ reachable: 'unverified', note: 'never read by any route/service/orchestrator code — per-agent truth not yet checked, see CLAIMS-INVENTORY.txt Addendum 5' }),
+  reversible_actions_only: () => ({ reachable: 'unverified', note: 'never read by any route/service/orchestrator code — per-agent truth not yet checked, see CLAIMS-INVENTORY.txt Addendum 5' }),
+};
+
+// Flattens the governance-shaped fields out of a manifest object: anything
+// in GOVERNANCE_CLAIM_FIELDS found at the top level, or nested one level
+// under a `governance` key (both shapes exist across this repo's manifests).
+// Generic on purpose: ANY boolean field (governance is claims territory --
+// booleans here read as "does this system do X"), plus anything already in
+// GOVERNANCE_CLAIM_FIELDS regardless of type (covers string-shaped claims
+// like pq_signing). Fields ending in _reason are the companion explanation
+// fields this pass introduced (see ais_required_reason/sal_logging_reason
+// above) -- never themselves a claim, always skipped.
+function collectGovernanceFields(obj) {
+  const out = {};
+  const isClaimish = (k, v) =>
+    !k.endsWith('_reason') && (typeof v === 'boolean' || GOVERNANCE_CLAIM_FIELDS.includes(k));
+  for (const [k, v] of Object.entries(obj || {})) {
+    if (k === 'governance' && v && typeof v === 'object') {
+      for (const [gk, gv] of Object.entries(v)) {
+        if (isClaimish(gk, gv)) out[gk] = gv;
+      }
+    } else if (isClaimish(k, v)) {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+
+function checkManifestClaims(label, manifest) {
+  const fields = collectGovernanceFields(manifest);
+  let failed = 0;
+  const checked = [];
+  for (const [field, value] of Object.entries(fields)) {
+    const assertion = GOVERNANCE_CLAIM_REGISTRY[field];
+    if (!assertion) {
+      record('2.9', 'fail',
+        `${label}: governance field '${field}' (value=${JSON.stringify(value)}) has no entry in ` +
+        `GOVERNANCE_CLAIM_REGISTRY — add a real reachability assertion before this can ship`);
+      failed++;
+      continue;
+    }
+    const { reachable, note } = assertion(value);
+    if (reachable === 'unverified') {
+      record('2.9', 'warn', `${label}: ${field}=${JSON.stringify(value)} — UNVERIFIED — ${note}`);
+    } else if (!reachable) {
+      record('2.9', 'fail', `${label}: ${field}=${JSON.stringify(value)} — ${note}`);
+      failed++;
+    } else {
+      checked.push(field);
+    }
+  }
+  // Explicit pass, not silence -- a check that only ever emits on failure
+  // looks identical to "didn't run" when everything's honest. Say so.
+  if (failed === 0 && checked.length > 0) {
+    record('2.9', 'pass', `${label}: all ${checked.length} governance field(s) verified (${checked.join(', ')})`);
+  } else if (checked.length === 0 && failed === 0) {
+    record('2.9', 'pass', `${label}: no governance-claim fields present`);
+  }
+}
+
+function check2_9() {
+  for (const agent of REQUIRED_AGENTS) {
+    const manifestPath = path.join(AGENTS_DIR, agent, 'manifest.json');
+    if (!fs.existsSync(manifestPath)) continue;
+    let manifest;
+    try { manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')); } catch { continue; }
+    checkManifestClaims(`${agent}/manifest.json`, manifest);
+  }
+
+  const regPath = path.join(REPO_ROOT, 'ais-registration-manifest.json');
+  if (fs.existsSync(regPath)) {
+    try {
+      const reg = JSON.parse(fs.readFileSync(regPath, 'utf8'));
+      for (const a of reg.agents || []) {
+        checkManifestClaims(`ais-registration-manifest.json (${a.agent_id})`, a);
+      }
+    } catch {
+      // Malformed JSON is a 2.4-shaped problem, not this check's to report.
     }
   }
 }
@@ -736,6 +914,8 @@ async function main() {
   check2_7();
   console.log('\n── 2.8 State-machine adjacency (CLOSE-GAP-30) ──────────');
   check2_8();
+  console.log('\n── 2.9 Universal governance-claim reachability guard ───');
+  check2_9();
 
   for (const r of results) {
     const icon = r.level === 'pass' ? '✓' : r.level === 'warn' ? '⚠' : '✗';

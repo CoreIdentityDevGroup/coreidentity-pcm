@@ -13,7 +13,8 @@
       "pipeline_stage": "intake",
       "governance": {
         "sentinel_enforced": false,
-        "sal_logging": "full",
+        "sal_logging": false,
+        "sal_logging_reason": "salLog() (agents/shared/sal-client.js) is a stub -- its own header says so -- and only writes to stdout; no SAL API exists in this or any other repo to log to. Set false 2026-08-14; see CLAIMS-INVENTORY.txt Addendum 5. Do NOT flip true until a real SAL endpoint exists.",
         "pq_signing": "UNSIGNED-NO-PQ-BACKEND-V1"
       }
     },{
@@ -24,7 +25,8 @@
       "pipeline_stage": "intake",
       "governance": {
         "sentinel_enforced": false,
-        "sal_logging": "full",
+        "sal_logging": false,
+        "sal_logging_reason": "salLog() (agents/shared/sal-client.js) is a stub -- its own header says so -- and only writes to stdout; no SAL API exists in this or any other repo to log to. Set false 2026-08-14; see CLAIMS-INVENTORY.txt Addendum 5. Do NOT flip true until a real SAL endpoint exists.",
         "pq_signing": "UNSIGNED-NO-PQ-BACKEND-V1"
       }
     },{
@@ -35,7 +37,8 @@
       "pipeline_stage": "appraisal_review",
       "governance": {
         "sentinel_enforced": false,
-        "sal_logging": "full",
+        "sal_logging": false,
+        "sal_logging_reason": "salLog() (agents/shared/sal-client.js) is a stub -- its own header says so -- and only writes to stdout; no SAL API exists in this or any other repo to log to. Set false 2026-08-14; see CLAIMS-INVENTORY.txt Addendum 5. Do NOT flip true until a real SAL endpoint exists.",
         "pq_signing": "UNSIGNED-NO-PQ-BACKEND-V1"
       }
     },{
@@ -46,7 +49,8 @@
       "pipeline_stage": "kyc_verification",
       "governance": {
         "sentinel_enforced": false,
-        "sal_logging": "full",
+        "sal_logging": false,
+        "sal_logging_reason": "salLog() (agents/shared/sal-client.js) is a stub -- its own header says so -- and only writes to stdout; no SAL API exists in this or any other repo to log to. Set false 2026-08-14; see CLAIMS-INVENTORY.txt Addendum 5. Do NOT flip true until a real SAL endpoint exists.",
         "pq_signing": "UNSIGNED-NO-PQ-BACKEND-V1"
       }
     },{
@@ -57,7 +61,8 @@
       "pipeline_stage": "kyc_verification",
       "governance": {
         "sentinel_enforced": false,
-        "sal_logging": "full",
+        "sal_logging": false,
+        "sal_logging_reason": "salLog() (agents/shared/sal-client.js) is a stub -- its own header says so -- and only writes to stdout; no SAL API exists in this or any other repo to log to. Set false 2026-08-14; see CLAIMS-INVENTORY.txt Addendum 5. Do NOT flip true until a real SAL endpoint exists.",
         "pq_signing": "UNSIGNED-NO-PQ-BACKEND-V1"
       }
     },{
@@ -68,7 +73,8 @@
       "pipeline_stage": "appraisal_review",
       "governance": {
         "sentinel_enforced": false,
-        "sal_logging": "full",
+        "sal_logging": false,
+        "sal_logging_reason": "salLog() (agents/shared/sal-client.js) is a stub -- its own header says so -- and only writes to stdout; no SAL API exists in this or any other repo to log to. Set false 2026-08-14; see CLAIMS-INVENTORY.txt Addendum 5. Do NOT flip true until a real SAL endpoint exists.",
         "pq_signing": "UNSIGNED-NO-PQ-BACKEND-V1"
       }
     },{
@@ -79,7 +85,8 @@
       "pipeline_stage": "bank_assignment",
       "governance": {
         "sentinel_enforced": false,
-        "sal_logging": "full",
+        "sal_logging": false,
+        "sal_logging_reason": "salLog() (agents/shared/sal-client.js) is a stub -- its own header says so -- and only writes to stdout; no SAL API exists in this or any other repo to log to. Set false 2026-08-14; see CLAIMS-INVENTORY.txt Addendum 5. Do NOT flip true until a real SAL endpoint exists.",
         "pq_signing": "UNSIGNED-NO-PQ-BACKEND-V1"
       }
     },{
@@ -90,7 +97,8 @@
       "pipeline_stage": "tokenization",
       "governance": {
         "sentinel_enforced": false,
-        "sal_logging": "full",
+        "sal_logging": false,
+        "sal_logging_reason": "salLog() (agents/shared/sal-client.js) is a stub -- its own header says so -- and only writes to stdout; no SAL API exists in this or any other repo to log to. Set false 2026-08-14; see CLAIMS-INVENTORY.txt Addendum 5. Do NOT flip true until a real SAL endpoint exists.",
         "pq_signing": "UNSIGNED-NO-PQ-BACKEND-V1"
       }
     },{
@@ -101,7 +109,8 @@
       "pipeline_stage": "completed",
       "governance": {
         "sentinel_enforced": false,
-        "sal_logging": "full",
+        "sal_logging": false,
+        "sal_logging_reason": "salLog() (agents/shared/sal-client.js) is a stub -- its own header says so -- and only writes to stdout; no SAL API exists in this or any other repo to log to. Set false 2026-08-14; see CLAIMS-INVENTORY.txt Addendum 5. Do NOT flip true until a real SAL endpoint exists.",
         "pq_signing": "UNSIGNED-NO-PQ-BACKEND-V1"
       }
     },{
@@ -112,7 +121,8 @@
       "pipeline_stage": "all_stages",
       "governance": {
         "sentinel_enforced": false,
-        "sal_logging": "full",
+        "sal_logging": false,
+        "sal_logging_reason": "salLog() (agents/shared/sal-client.js) is a stub -- its own header says so -- and only writes to stdout; no SAL API exists in this or any other repo to log to. Set false 2026-08-14; see CLAIMS-INVENTORY.txt Addendum 5. Do NOT flip true until a real SAL endpoint exists.",
         "pq_signing": "UNSIGNED-NO-PQ-BACKEND-V1"
       }
     },{
@@ -123,7 +133,8 @@
       "pipeline_stage": "monetization",
       "governance": {
         "sentinel_enforced": false,
-        "sal_logging": "full",
+        "sal_logging": false,
+        "sal_logging_reason": "salLog() (agents/shared/sal-client.js) is a stub -- its own header says so -- and only writes to stdout; no SAL API exists in this or any other repo to log to. Set false 2026-08-14; see CLAIMS-INVENTORY.txt Addendum 5. Do NOT flip true until a real SAL endpoint exists.",
         "pq_signing": "UNSIGNED-NO-PQ-BACKEND-V1"
       }
     }]
