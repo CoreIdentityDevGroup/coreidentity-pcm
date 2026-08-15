@@ -9,24 +9,28 @@ name: SDN Ingest (daily OFAC SDN list fetch)
 # connecting to the database itself. Same pattern already established for
 # /monitoring (Phase 3.6).
 #
-# workflow_dispatch ONLY for now, deliberately not scheduled: the
-# PCM_MONITORING_SCHEDULER_KEY this endpoint's auth depends on (same key
-# /monitoring already uses -- see api/middleware/authenticateScheduler.js)
-# is not yet provisioned in Secrets Manager or wired into the live pcm-api
-# task definition (confirmed live -- checked both, neither exists). Until
-# that's decided and applied, a live cron here would just fire daily 401s.
-# Same "start manual, prove it works, enable a schedule later" discipline
-# already used for chc-mcp-server's build-push-ecr.yml and
-# coreidentity-tools' coreg-e2e.yml.
+# SCHEDULED, live as of 2026-08-15. This route now has its OWN dedicated
+# key (PCM_SDN_INGEST_SCHEDULER_KEY), provisioned in Secrets Manager and
+# wired into the live pcm-api task definition (revision 47) via a targeted,
+# minimal AWS CLI update -- deliberately not /monitoring's shared key
+# (authenticateScheduler.js was split into a per-route factory specifically
+# so provisioning this route's key has zero effect on /monitoring's
+# reachability, which stays 401/dark). Verified live before enabling the
+# schedule below: the deployed pcm-api image SHA matches git HEAD exactly
+# (nothing else moved), a direct curl against the real endpoint with the
+# real key returned 200 with a real ingestion result, and the same key
+# correctly still gets 401 against /monitoring.
 #
-# Once the scheduler key is provisioned and wired:
-#   1. Add it as this repo's PCM_SCHEDULER_API_KEY secret.
-#   2. Uncomment the `schedule:` block below.
+# Daily at 09:00 UTC matches the design doc's ingestion cadence (piece 1)
+# -- more frequent than OFAC actually publishes (observed cadence: 1-5 day
+# gaps, see docs/SDN-Sanctions-Screening-Design.md piece 2), so this is
+# about catching a fresh publication promptly, not fighting a faster
+# upstream schedule.
 
 on:
   workflow_dispatch:
-  # schedule:
-  #   - cron: '0 9 * * *'  # daily, 09:00 UTC
+  schedule:
+    - cron: '0 9 * * *'  # daily, 09:00 UTC
 
 env:
   SDN_INGEST_URL: https://api.coregenisis.com/api/v1/scheduled/sdn-ingest
