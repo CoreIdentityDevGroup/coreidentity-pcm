@@ -43,21 +43,35 @@ router.post('/', authorize('trade_group_owner','program_manager','intake_officer
   try {
     const {
       full_name, email, phone, country_of_origin, jurisdiction,
-      referral_source, referral_contact, notes
+      referral_source, referral_contact, notes,
+      given_name, family_name, date_of_birth
     } = req.body;
 
     if (!full_name || !email || !country_of_origin) {
       return res.status(400).json({ error: 'full_name, email, and country_of_origin are required' });
     }
+    // SDN screening design (docs/SDN-Sanctions-Screening-Design.md):
+    // required for all new intake going forward, same enforcement style as
+    // the fields above (application-level, not a DB NOT NULL -- see
+    // db/migrations/0004's comment on why the DB column stays nullable).
+    // DOB is the strongest disambiguator OFAC actually provides
+    // structured; screening auto-triggers synchronously right after this
+    // route returns, so it has to be collected at the same moment as
+    // everything else, not attached later.
+    if (!given_name || !family_name || !date_of_birth) {
+      return res.status(400).json({ error: 'given_name, family_name, and date_of_birth are required' });
+    }
 
     const result = await db.clients.query(
       `INSERT INTO pcm_clients
         (full_name, email, phone, country_of_origin, jurisdiction,
-         referral_source, referral_contact, notes)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+         referral_source, referral_contact, notes,
+         given_name, family_name, date_of_birth)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
        RETURNING *`,
       [full_name, email, phone, country_of_origin, jurisdiction,
-       referral_source, referral_contact, notes]
+       referral_source, referral_contact, notes,
+       given_name, family_name, date_of_birth]
     );
 
     await db.clients.query(
@@ -74,6 +88,8 @@ router.post('/', authorize('trade_group_owner','program_manager','intake_officer
       console.log(JSON.stringify({ level: 'info', message: 'intake-parser done', status: r1.status }));
       const r2 = await _orch.runAgent('ofac-screening', {
         client_id: _newClient.client_id, full_name: _newClient.full_name,
+        given_name: _newClient.given_name, family_name: _newClient.family_name,
+        date_of_birth: _newClient.date_of_birth,
         country_of_origin: _newClient.country_of_origin, db: require('../services/db'), triggered_by: 'auto'
       });
       console.log(JSON.stringify({ level: 'info', message: 'ofac-screening done', status: r2.status }));
@@ -89,7 +105,7 @@ router.patch('/:id', authorize('trade_group_owner','program_manager','intake_off
     const allowed = ['full_name','email','phone','country_of_origin','jurisdiction',
                      'referral_source','referral_contact','notes',
                      'assigned_trade_group_owner','assigned_program_manager','assigned_intake_officer',
-                     'bank_assignment'];
+                     'bank_assignment','given_name','family_name','date_of_birth'];
     const updates = [];
     const params  = [];
 
