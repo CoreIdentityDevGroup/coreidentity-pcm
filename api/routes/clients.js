@@ -201,6 +201,51 @@ router.post('/:id/kyc', authorize('trade_group_owner','program_manager','intake_
   } catch (err) { next(err); }
 });
 
+// ─── GET ID DOCUMENTS ─────────────────────────────────────────────────────────
+// SDN screening design (docs/SDN-Sanctions-Screening-Design.md): structured
+// ID-document capture, added alongside given_name/family_name/date_of_birth
+// this pass. Mirrors the KYC document routes above exactly (metadata-only
+// registration, upload via signed URL) -- same GET/POST shape, no PATCH/
+// DELETE, same as pcm_kyc_documents.
+router.get('/:id/id-documents', async (req, res, next) => {
+  try {
+    const result = await db.clients.query(
+      `SELECT id_doc_id, doc_type, id_number, issuing_country, expiry_date,
+              file_name, uploaded_at, uploaded_by, vault_status, gcs_object_path
+       FROM pcm_client_id_documents
+       WHERE client_id = $1 AND vault_status = 'active'
+       ORDER BY uploaded_at DESC`,
+      [req.params.id]
+    );
+    res.json({ documents: result.rows });
+  } catch (err) { next(err); }
+});
+
+// ─── REGISTER ID DOCUMENT (metadata only — upload via signed URL) ─────────────
+router.post('/:id/id-documents', authorize('trade_group_owner','program_manager','intake_officer'), async (req, res, next) => {
+  try {
+    const { doc_type, id_number, issuing_country, expiry_date,
+            file_name, content_type, gcs_bucket, gcs_object_path } = req.body;
+
+    if (!doc_type || !id_number || !issuing_country) {
+      return res.status(400).json({ error: 'doc_type, id_number, and issuing_country are required' });
+    }
+
+    const result = await db.clients.query(
+      `INSERT INTO pcm_client_id_documents
+        (client_id, doc_type, id_number, issuing_country, expiry_date,
+         gcs_bucket, gcs_object_path, file_name, content_type, uploaded_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+       RETURNING id_doc_id, doc_type, issuing_country, expiry_date, vault_status, created_at`,
+      [req.params.id, doc_type, id_number, issuing_country, expiry_date || null,
+       gcs_bucket || null, gcs_object_path || null, file_name || null, content_type || null,
+       req.user.sub || 'system']
+    );
+
+    res.status(201).json(result.rows[0]);
+  } catch (err) { next(err); }
+});
+
 // ─── GET POF RECORDS ──────────────────────────────────────────────────────────
 router.get('/:id/pof', async (req, res, next) => {
   try {
