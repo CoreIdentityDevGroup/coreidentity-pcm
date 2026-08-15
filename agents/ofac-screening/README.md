@@ -7,9 +7,15 @@
 
 ## Description
 
-Heuristic pre-screen only -- matches client name/country against a hardcoded list (10 countries, 4 regex patterns compiled into source). Does NOT call any external OFAC/SDN API or watchlist. A match is real signal (status: flagged); no match does NOT mean a real sanctions screen cleared this client (status: not_authoritatively_screened). Logs result to audit trail.
+Real screening against OFAC's actual SDN list. `scripts/ofac-sdn-ingest.js` fetches and versions the list (`pcm_sdn_list_versions`/`pcm_sdn_entries`/`pcm_sdn_aliases`); this agent screens each client against the most recent successfully-ingested version at `lib/matcher.js`'s exact and near-exact tiers. See `docs/SDN-Sanctions-Screening-Design.md` for the full design, endpoint verification, threshold derivation, and stated weak points.
 
-**CLOSE-GAP-25:** full OFAC SDN list integration is tracked separately (see docs/Instrument-Counterparty-Integrity-Agent-Spec.md §6.3) -- ingesting Treasury's actual SDN dataset and a real matching pipeline is a genuine data-integration dependency, not something this agent currently does.
+**Freshness gate** (`lib/freshness.js`): screening against a list older than 7 days blocks (`not_authoritatively_screened`) rather than clears; 4–7 days old warns without blocking.
+
+**Tiers implemented:** exact (normalized string match) and near-exact (normalization + a bounded, explicitly non-exhaustive transliteration-equivalence table). A match at either tier is a hard flag (`flagged`) resolved via the existing dual-control override flow (`POST /:id/ofac/override`). **Fuzzy matching (tier 3) is not built** — explicit, separately-dated fast-follow requiring a labeled validation set; see the design doc's effort estimate for why it wasn't rushed into this pass.
+
+**What this does NOT catch, stated plainly:** transliteration variants outside the curated table; nicknames; beneficial-ownership/shell-entity structures (name-only screening); DOB is captured at intake but not yet used as a matching filter. See the design doc's "weak points" section for the full list.
+
+**CLOSE-GAP-25 (superseded):** this was the fast-follow spec referenced in docs/Instrument-Counterparty-Integrity-Agent-Spec.md §6.3 — now implemented for the exact/near-exact tiers.
 
 ## Governance
 
