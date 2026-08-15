@@ -20,6 +20,7 @@ async function execute(context) {
   );
 
   const alerts = [];
+  const SEVERITY_RANK = { info: 1, warning: 2, critical: 3 };
 
   for (const agreement of expiring.rows) {
     const days_until = Math.floor(
@@ -29,6 +30,31 @@ async function execute(context) {
     const severity = days_until <= 0   ? 'critical'
                    : days_until <= 30  ? 'warning'
                    : 'info';
+
+    // 2026-08-15: this used to log unconditionally on every run -- with no
+    // upper bound on run frequency (the route was about to be scheduled
+    // every 15 minutes) that meant one row per still-expiring agreement
+    // PER RUN, forever, until it actually expired. An alert should mark a
+    // change (first crossing into the window, or an escalation to a more
+    // severe bucket), not repeat a condition that hasn't changed. The
+    // table's own resolved/resolved_at/resolved_by columns confirm the
+    // intended lifecycle is log-once-then-staff-resolves, not
+    // log-every-tick. Suppress unless: no prior alert exists for this
+    // agreement, the prior one is resolved (a fresh occurrence is
+    // meaningful even at the same severity), or severity has escalated
+    // since the prior unresolved one.
+    const { rows: priorRows } = await db.forms.query(
+      `SELECT severity, resolved
+         FROM pcm_contract_monitoring_log
+        WHERE agreement_id = $1
+        ORDER BY created_at DESC
+        LIMIT 1`,
+      [agreement.agreement_id]
+    );
+    const prior = priorRows[0];
+    const isNewOccurrence = !prior || prior.resolved
+      || SEVERITY_RANK[severity] > SEVERITY_RANK[prior.severity];
+    if (!isNewOccurrence) continue;
 
     alerts.push({
       agreement_id:      agreement.agreement_id,
