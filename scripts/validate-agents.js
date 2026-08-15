@@ -303,6 +303,16 @@ const EXEMPT_GATE_COLUMN_WRITES = [
   { file: 'api/routes/clients.js', col: 'ofac_status',    match: "SET ofac_status = 'attested_out_of_band'", reason: 'CLOSE-GAP-26 out-of-band attestation confirm step; sets status only after two-principal confirmation, verified independently by the KYC gate exactly like the manual_review path' },
   { file: 'api/routes/clients.js', col: 'review_outcome', match: "review_outcome = 'ATTESTATION_CONFIRMED'", reason: 'CLOSE-GAP-26 attestation confirm step; the KYC gate independently re-verifies this value against pcm_ofac_results rather than trusting the flag' },
   { file: 'api/routes/clients.js', col: 'provider',       match: "provider, status, raw_response_summary, reviewed_by", reason: "CLOSE-GAP-19a override record — provider is hardcoded literal 'MANUAL_OVERRIDE', not client-supplied" },
+  // SDN screening design: pipeline.js's new 'clear' branch introduces a
+  // `status = 'clear'` WHERE-clause literal against pcm_ofac_results,
+  // which makes pcm_ofac_results.status a newly-derived gate-bound column
+  // -- surfacing that these two existing INSERT sites (CLOSE-GAP-19a/26,
+  // unchanged by this pass) write it too. Both write a hardcoded literal
+  // status as part of the initiate step, before any dual-control
+  // confirmation -- same reasoning already applied to their ofac_status
+  // counterparts above.
+  { file: 'api/routes/clients.js', col: 'status', match: "'MANUAL_OVERRIDE', 'manual_review'", reason: 'CLOSE-GAP-19a override-initiate INSERT; hardcoded literal, not client-supplied, and the KYC gate independently re-verifies review_outcome before trusting anything downstream of this row' },
+  { file: 'api/routes/clients.js', col: 'status', match: "'OUT_OF_BAND_ATTESTATION', 'attested_out_of_band'", reason: 'CLOSE-GAP-26 attestation-initiate INSERT; hardcoded literal, not client-supplied, and the KYC gate independently re-verifies review_outcome before trusting anything downstream of this row' },
   { file: 'api/routes/forms.js',   col: 'status',         match: "SET status = 'fully_executed'", reason: 'computed from actual signature count in the sign flow itself (parties/:party_id/sign), not an unverified assertion' },
   { file: 'api/routes/forms.js',   col: 'agreement_type', match: "INSERT INTO pcm_agreements", reason: 'set once at agreement creation, never mutated afterward — not a stage-transition bypass' },
 ];

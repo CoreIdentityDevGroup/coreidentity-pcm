@@ -62,19 +62,29 @@ const GATE_REQUIREMENTS = {
     if (parseInt(kyc.rows[0].count) === 0) errors.push('No KYC documents on file');
     if (parseInt(pof.rows[0].count) === 0) errors.push('No Proof of Funds on file');
 
-    // CLOSE-GAP-27: allowlist, not blocklist. Only two independently-
-    // verified states satisfy OFAC screening -- everything else
-    // (pending, flagged, not_authoritatively_screened, the legacy 'clear'
-    // value, or either status below without its matching confirmed
-    // record) blocks by default. Enumerating only the bad values here
-    // previously let 'clear' -- an unauthoritative heuristic result --
-    // pass with zero human involvement. See CLOSE-GAP-25/26 and
+    // CLOSE-GAP-27: allowlist, not blocklist. Enumerating only the bad
+    // values previously let 'clear' -- an unauthoritative heuristic
+    // result -- pass with zero human involvement. See CLOSE-GAP-25/26 and
     // db/migrations/0001-ofac-status-not-authoritative.sql.
+    //
+    // SDN screening design (docs/SDN-Sanctions-Screening-Design.md):
+    // 'clear' is now a third independently-verified state, alongside the
+    // two dual-control states below -- the real exact/near-exact engine
+    // (agents/ofac-screening/index.js) can produce an authoritative clear
+    // without a human in the loop, which is the whole point of piece 4
+    // (dual-control becomes the exception path, not the routine one).
+    // Re-verified against pcm_ofac_results directly, same discipline as
+    // the other two branches -- NOT trusted from the status column alone,
+    // because a stale 'clear' can still exist on a row screened before
+    // this engine existed (the CLOSE-GAP-25 migration note documents
+    // exactly one such row). Only a 'clear' actually produced by the real
+    // engine (provider + a real match_method, not a legacy/unknown one)
+    // satisfies the gate.
     const ofacStatus = ofac.rows[0]?.ofac_status;
     let ofacSatisfied = false;
 
     if (ofacStatus === 'manual_review') {
-      // Genuinely flagged by the heuristic, dual-control override.
+      // Genuinely flagged by the engine, dual-control override.
       const override = await db.clients.query(
         `SELECT review_outcome FROM pcm_ofac_results
          WHERE client_id = $1 AND provider = 'MANUAL_OVERRIDE'
@@ -82,18 +92,26 @@ const GATE_REQUIREMENTS = {
       );
       ofacSatisfied = override.rows[0]?.review_outcome === 'MANUAL_OVERRIDE_CONFIRMED';
     } else if (ofacStatus === 'attested_out_of_band') {
-      // Heuristic found no match, but that's not authoritative -- a real
-      // out-of-band screen was performed and dual-control attested.
+      // Engine could not authoritatively screen (e.g. a freshness block),
+      // but a real out-of-band screen was performed and dual-control
+      // attested.
       const attestation = await db.clients.query(
         `SELECT review_outcome FROM pcm_ofac_results
          WHERE client_id = $1 AND provider = 'OUT_OF_BAND_ATTESTATION'
          ORDER BY screened_at DESC LIMIT 1`, [client_id]
       );
       ofacSatisfied = attestation.rows[0]?.review_outcome === 'ATTESTATION_CONFIRMED';
+    } else if (ofacStatus === 'clear') {
+      const cleared = await db.clients.query(
+        `SELECT match_method FROM pcm_ofac_results
+         WHERE client_id = $1 AND provider = 'SDN-ENGINE-EXACT-NEAR-EXACT-V1' AND status = 'clear'
+         ORDER BY screened_at DESC LIMIT 1`, [client_id]
+      );
+      ofacSatisfied = ['exact', 'near_exact'].includes(cleared.rows[0]?.match_method);
     }
 
     if (!ofacSatisfied) {
-      errors.push(`OFAC screening not satisfied (status: ${ofacStatus || 'none'}) — requires either a confirmed dual-control override (heuristic flagged a match) or a confirmed out-of-band attestation (heuristic found no match, which is not itself authoritative)`);
+      errors.push(`OFAC screening not satisfied (status: ${ofacStatus || 'none'}) — requires an authoritative real-engine clear result, a confirmed dual-control override (engine flagged a match), or a confirmed out-of-band attestation (engine could not authoritatively screen)`);
     }
     return errors;
   },
