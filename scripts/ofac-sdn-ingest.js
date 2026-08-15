@@ -179,7 +179,13 @@ async function recordFailedFetch(errorMessage) {
   }
 }
 
-async function main() {
+// Core ingestion logic, reusable by both the CLI entry point below and
+// api/routes/scheduled.js's POST /sdn-ingest (the external-scheduler HTTP
+// target -- same authenticateScheduler pattern as the existing /monitoring
+// route). Returns a result object on success; throws on failure (callers
+// decide how to translate that into a process exit code vs. an HTTP
+// response).
+async function runIngest() {
   console.log(JSON.stringify({ level: 'info', message: 'SDN ingest starting', url: SDN_XML_URL, at: new Date().toISOString() }));
 
   let text, sha256;
@@ -188,7 +194,7 @@ async function main() {
   } catch (err) {
     console.error(JSON.stringify({ level: 'error', message: 'SDN fetch failed', error: err.message }));
     await recordFailedFetch(`fetch: ${err.message}`);
-    process.exit(1);
+    throw err;
   }
 
   let parsed;
@@ -197,7 +203,7 @@ async function main() {
   } catch (err) {
     console.error(JSON.stringify({ level: 'error', message: 'SDN parse failed', error: err.message }));
     await recordFailedFetch(`parse: ${err.message}`);
-    process.exit(1);
+    throw err;
   }
 
   const { publishDate, recordCount, entries, aliasesByEntry } = parsed;
@@ -264,21 +270,29 @@ async function main() {
 
     await client.query('COMMIT');
 
-    console.log(JSON.stringify({
-      level: 'info', message: 'SDN ingest complete',
+    const result = {
       version_id: versionId, publish_date: publishDate,
       entries_stored: entryRows.length, aliases_stored: aliasRows.length
-    }));
+    };
+    console.log(JSON.stringify({ level: 'info', message: 'SDN ingest complete', ...result }));
+    return result;
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     console.error(JSON.stringify({ level: 'error', message: 'SDN ingest DB write failed', error: err.message }));
     await recordFailedFetch(`db_write: ${err.message}`);
-    process.exit(1);
+    throw err;
   } finally {
     client.release();
   }
+}
 
-  process.exit(0);
+async function main() {
+  try {
+    await runIngest();
+    process.exit(0);
+  } catch (err) {
+    process.exit(1);
+  }
 }
 
 if (require.main === module) {
@@ -288,4 +302,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { parseSdn, parsePublishDate };
+module.exports = { parseSdn, parsePublishDate, runIngest };

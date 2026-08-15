@@ -116,4 +116,27 @@ router.post('/monitoring', async (req, res, next) => {
   }
 });
 
+// POST /api/v1/scheduled/sdn-ingest
+// External-scheduler target for daily OFAC SDN list ingestion (SDN
+// sanctions screening design, docs/SDN-Sanctions-Screening-Design.md
+// piece 1). Same authenticateScheduler gate as /monitoring above (applied
+// once via router.use, not repeated here).
+//
+// No idempotency-key bucketing like /monitoring: ofac-sdn-ingest.js's
+// runIngest() always writes a fresh, self-contained version + entry/alias
+// snapshot (deliberately simple, see the script's own header comment) --
+// a duplicate same-day firing just produces a second version row with the
+// same publish_date, which is harmless and not worth the bucketing
+// complexity /monitoring needs for its own different (in-process cycle,
+// not an external fetch) idempotency problem.
+router.post('/sdn-ingest', async (req, res, next) => {
+  try {
+    const { runIngest } = require('../../scripts/ofac-sdn-ingest');
+    const result = await runIngest();
+    res.status(200).json({ status: 'success', ...result });
+  } catch (err) {
+    res.status(502).json({ status: 'error', error: err.message });
+  }
+});
+
 module.exports = router;

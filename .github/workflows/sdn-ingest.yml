@@ -1,0 +1,56 @@
+name: SDN Ingest (daily OFAC SDN list fetch)
+
+# SDN sanctions screening design (docs/SDN-Sanctions-Screening-Design.md),
+# piece 1. Triggers api/routes/scheduled.js's POST /sdn-ingest, which runs
+# scripts/ofac-sdn-ingest.js's runIngest() inside pcm-api (already deployed
+# inside the VPC with DB access) -- a GitHub-hosted runner cannot reach the
+# RDS instance directly (confirmed live 2026-08-15: PubliclyAccessible is
+# false), so this workflow calls the public HTTPS endpoint instead of
+# connecting to the database itself. Same pattern already established for
+# /monitoring (Phase 3.6).
+#
+# workflow_dispatch ONLY for now, deliberately not scheduled: the
+# PCM_MONITORING_SCHEDULER_KEY this endpoint's auth depends on (same key
+# /monitoring already uses -- see api/middleware/authenticateScheduler.js)
+# is not yet provisioned in Secrets Manager or wired into the live pcm-api
+# task definition (confirmed live -- checked both, neither exists). Until
+# that's decided and applied, a live cron here would just fire daily 401s.
+# Same "start manual, prove it works, enable a schedule later" discipline
+# already used for chc-mcp-server's build-push-ecr.yml and
+# coreidentity-tools' coreg-e2e.yml.
+#
+# Once the scheduler key is provisioned and wired:
+#   1. Add it as this repo's PCM_SCHEDULER_API_KEY secret.
+#   2. Uncomment the `schedule:` block below.
+
+on:
+  workflow_dispatch:
+  # schedule:
+  #   - cron: '0 9 * * *'  # daily, 09:00 UTC
+
+env:
+  SDN_INGEST_URL: https://api.coregenisis.com/api/v1/scheduled/sdn-ingest
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger SDN ingest
+        run: |
+          set -euo pipefail
+          if [ -z "${PCM_SCHEDULER_API_KEY:-}" ]; then
+            echo "FAIL: PCM_SCHEDULER_API_KEY secret not set on this repo yet -- see this file's header comment."
+            exit 1
+          fi
+          code=$(curl -s -o /tmp/resp.json -w "%{http_code}" --max-time 120 \
+            -X POST "$SDN_INGEST_URL" \
+            -H "X-Scheduler-Api-Key: ${PCM_SCHEDULER_API_KEY}")
+          echo "HTTP $code"
+          cat /tmp/resp.json
+          if [ "$code" != "200" ]; then
+            echo "FAIL: sdn-ingest endpoint returned $code"
+            exit 1
+          fi
+          echo "PASS: sdn-ingest completed"
+        env:
+          PCM_SCHEDULER_API_KEY: ${{ secrets.PCM_SCHEDULER_API_KEY }}
