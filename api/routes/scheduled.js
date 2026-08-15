@@ -6,7 +6,10 @@ const { authenticateScheduler } = require('../middleware/authenticateScheduler')
 const { runMonitoringCycle }    = require('../../agent-orchestrator');
 
 const router = express.Router();
-router.use(authenticateScheduler);
+// SDN screening design: no more router-wide router.use(authenticateScheduler)
+// -- that made every route on this router share one key's blast radius (see
+// authenticateScheduler.js header). Applied per-route below instead, each
+// with its own dedicated env var.
 
 let cloudwatch = null;
 function getCloudWatchClient() {
@@ -16,20 +19,17 @@ function getCloudWatchClient() {
   return cloudwatch;
 }
 
-// Emits a real success signal for the staleness alarm to watch for. Best
-// effort and non-fatal: the IAM permission for this is provisioned in a
-// separate, not-yet-applied Terraform change (see aws-infrastructure
-// pcm-monitoring-schedule.tf) -- until that lands, this call fails
-// AccessDenied and is logged, but does not affect the HTTP response or
-// the monitoring cycle's own success/failure.
-async function emitSuccessMetric() {
+// Emits a real success signal for a staleness alarm to watch for. Best
+// effort and non-fatal by design: a caller's success/failure response must
+// never depend on whether this side-channel metric emission succeeded.
+async function emitSuccessMetric(metricName) {
   try {
     const { PutMetricDataCommand } = require('@aws-sdk/client-cloudwatch');
     const client = getCloudWatchClient();
     await client.send(new PutMetricDataCommand({
       Namespace: 'CoreIdentity/PCM',
       MetricData: [{
-        MetricName: 'MonitoringCycleSuccess',
+        MetricName: metricName,
         Value: 1,
         Unit: 'Count',
         Dimensions: [{ Name: 'Service', Value: 'pcm-api' }],
@@ -39,7 +39,7 @@ async function emitSuccessMetric() {
   } catch (err) {
     console.warn(JSON.stringify({
       level: 'warn',
-      message: 'Failed to emit MonitoringCycleSuccess metric — staleness alarm depends on this once provisioned',
+      message: `Failed to emit ${metricName} metric — staleness alarm depends on this`,
       error: err.message
     }));
   }
@@ -68,7 +68,7 @@ async function emitSuccessMetric() {
 // firing lands in a new bucket and actually runs. An explicit
 // Idempotency-Key header is still honored if a caller supplies one (manual
 // testing, or a future scheduler that does support per-firing values).
-router.post('/monitoring', async (req, res, next) => {
+router.post('/monitoring', authenticateScheduler('PCM_MONITORING_SCHEDULER_KEY'), async (req, res, next) => {
   const intervalMs = parseInt(process.env.PCM_MONITORING_INTERVAL_MS || '900000', 10);
   const idempotencyKey = req.headers['idempotency-key']
     || `scheduled-${Math.floor(Date.now() / intervalMs)}`;
@@ -104,7 +104,7 @@ router.post('/monitoring', async (req, res, next) => {
       [finalStatus, JSON.stringify(results), idempotencyKey]
     );
 
-    if (allOk) await emitSuccessMetric();
+    if (allOk) await emitSuccessMetric('MonitoringCycleSuccess');
 
     res.status(200).json({ status: finalStatus, results });
   } catch (err) {
@@ -119,8 +119,9 @@ router.post('/monitoring', async (req, res, next) => {
 // POST /api/v1/scheduled/sdn-ingest
 // External-scheduler target for daily OFAC SDN list ingestion (SDN
 // sanctions screening design, docs/SDN-Sanctions-Screening-Design.md
-// piece 1). Same authenticateScheduler gate as /monitoring above (applied
-// once via router.use, not repeated here).
+// piece 1). Own dedicated key (PCM_SDN_INGEST_SCHEDULER_KEY) -- provisioning
+// this route's key has zero effect on /monitoring's reachability, and vice
+// versa (see authenticateScheduler.js header for why that split happened).
 //
 // No idempotency-key bucketing like /monitoring: ofac-sdn-ingest.js's
 // runIngest() always writes a fresh, self-contained version + entry/alias
@@ -129,10 +130,18 @@ router.post('/monitoring', async (req, res, next) => {
 // same publish_date, which is harmless and not worth the bucketing
 // complexity /monitoring needs for its own different (in-process cycle,
 // not an external fetch) idempotency problem.
-router.post('/sdn-ingest', async (req, res, next) => {
+//
+// Emits SdnIngestSuccess on success -- the staleness alarm watching this
+// metric (aws-infrastructure pcm-monitoring-schedule.tf) is the actual
+// alarm for a silently-stopped ingestion job; the freshness gate in
+// agents/ofac-screening/lib/freshness.js is the backstop that blocks
+// screening once the list is already stale, not the thing that should
+// notify anyone first.
+router.post('/sdn-ingest', authenticateScheduler('PCM_SDN_INGEST_SCHEDULER_KEY'), async (req, res, next) => {
   try {
     const { runIngest } = require('../../scripts/ofac-sdn-ingest');
     const result = await runIngest();
+    await emitSuccessMetric('SdnIngestSuccess');
     res.status(200).json({ status: 'success', ...result });
   } catch (err) {
     res.status(502).json({ status: 'error', error: err.message });
