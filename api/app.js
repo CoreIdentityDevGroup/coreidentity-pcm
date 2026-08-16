@@ -28,6 +28,32 @@ const authRouter         = require('./routes/auth');
 const uploadRouter       = require('./routes/upload');
 const downloadRouter     = require('./routes/download');
 const clientAuthRouter   = require('./routes/client-auth');
+
+// Process-level safety net (registered before route mounting/app.listen()).
+// Express 4.x does not catch async handler rejections -- an unhandled one
+// hits Node's default unhandledRejection behavior, which is process
+// termination. A rejection should degrade one request, not kill the
+// service; an uncaughtException leaves the process in an unknown state, so
+// that one still exits (ECS replaces the task).
+process.on('unhandledRejection', (reason) => {
+  console.error(JSON.stringify({
+    level: 'error',
+    message: 'unhandledRejection',
+    error: reason instanceof Error ? reason.message : String(reason),
+    stack: reason instanceof Error ? reason.stack : undefined,
+    timestamp: new Date().toISOString()
+  }));
+});
+process.on('uncaughtException', (err) => {
+  console.error(JSON.stringify({
+    level: 'error',
+    message: 'uncaughtException',
+    error: err?.message,
+    stack: err?.stack,
+    timestamp: new Date().toISOString()
+  }));
+  process.exit(1);
+});
 const referrersRouter    = require('./routes/referrers');
 const leadsRouter        = require('./routes/leads');
 const agentsRouter       = require('./routes/agents');
