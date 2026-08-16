@@ -3,6 +3,7 @@ const governance = require('../services/governance');
 const express = require('express');
 const multer  = require('multer');
 const { Storage } = require('@google-cloud/storage');
+const { authorize } = require('../middleware/authorize');
 const router  = express.Router();
 
 const storage = new Storage({ projectId: process.env.GCP_PROJECT_ID });
@@ -25,7 +26,12 @@ const ALLOWED_TYPES = [
 
 // POST /api/v1/upload
 // Form: file, doc_category, client_id, asset_id (optional)
-router.post('/', upload.single('file'), async (req, res) => {
+// Staff-only -- same role tuple already used for registering KYC/POF document
+// metadata (POST /clients/:id/kyc, /pof, etc.). Previously had no authorize()
+// at all: any authenticated role, including 'client', could upload a file
+// tagged to an arbitrary client_id, forging evidence into another client's
+// KYC/POF/ID-document vault.
+router.post('/', authorize('trade_group_owner','program_manager','intake_officer'), upload.single('file'), async (req, res) => {
   const { doc_category, client_id, asset_id } = req.body;
   const file = req.file;
 

@@ -3,6 +3,7 @@
 const express  = require('express');
 const db       = require('../services/db');
 const { authorize } = require('../middleware/authorize');
+const { requireOwnClientOrStaff } = require('../middleware/ownership');
 const router   = express.Router();
 
 const TRANSACTION_TYPES = ['crypto', 'cash', 'asset'];
@@ -77,7 +78,12 @@ router.post('/', authorize('trade_group_owner','program_manager','intake_officer
 // ─── LIST TRANSACTIONS (optionally by client) ─────────────────────────────────
 router.get('/', async (req, res, next) => {
   try {
-    const { client_id, status, limit = 50, offset = 0 } = req.query;
+    const { status, limit = 50, offset = 0 } = req.query;
+    // Client-role tokens are always scoped to their own client_id, regardless
+    // of any client_id passed in the query string -- the query param must not
+    // let a client credential list another client's transactions. Staff roles
+    // keep the existing optional filter.
+    const client_id = req.user?.role === 'client' ? req.user.client_id : req.query.client_id;
     let query = `SELECT * FROM pcm_transactions WHERE 1 = 1`;
     const params = [];
 
@@ -94,7 +100,13 @@ router.get('/', async (req, res, next) => {
 });
 
 // ─── GET TRANSACTION DETAIL (+ its 8 stages) ──────────────────────────────────
-router.get('/:id', async (req, res, next) => {
+router.get('/:id', requireOwnClientOrStaff(async req => {
+  const r = await db.clients.query(
+    `SELECT client_id FROM pcm_transactions WHERE transaction_id = $1`,
+    [req.params.id]
+  );
+  return r.rows.length ? r.rows[0].client_id : null;
+}), async (req, res, next) => {
   try {
     const result = await db.clients.query(
       `SELECT * FROM pcm_transactions WHERE transaction_id = $1`,

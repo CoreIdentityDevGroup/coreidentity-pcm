@@ -3,12 +3,28 @@
 const express  = require('express');
 const db       = require('../services/db');
 const { authorize } = require('../middleware/authorize');
+const { requireOwnClientOrStaff } = require('../middleware/ownership');
 const router   = express.Router();
+
+// Client-linked GET routes below take asset_id from the path and look up its
+// owning client_id. Matches the ownership check already established in
+// transactions.js's acknowledge-rules route.
+const ownAsset = requireOwnClientOrStaff(async req => {
+  const r = await db.assets.query(
+    `SELECT client_id FROM pcm_assets WHERE asset_id = $1 AND deleted_at IS NULL`,
+    [req.params.id]
+  );
+  return r.rows.length ? r.rows[0].client_id : null;
+});
 
 // ─── LIST ASSETS ──────────────────────────────────────────────────────────────
 router.get('/', async (req, res, next) => {
   try {
-    const { asset_type, pipeline_stage, client_id, limit = 50, offset = 0 } = req.query;
+    const { asset_type, pipeline_stage, limit = 50, offset = 0 } = req.query;
+    // Client-role tokens are always scoped to their own client_id, regardless
+    // of any client_id passed in the query string -- same fix as
+    // transactions.js's LIST route.
+    const client_id = req.user?.role === 'client' ? req.user.client_id : req.query.client_id;
     let query = `SELECT * FROM pcm_assets WHERE deleted_at IS NULL`;
     const params = [];
 
@@ -26,7 +42,7 @@ router.get('/', async (req, res, next) => {
 });
 
 // ─── GET ASSET ────────────────────────────────────────────────────────────────
-router.get('/:id', async (req, res, next) => {
+router.get('/:id', ownAsset, async (req, res, next) => {
   try {
     const result = await db.assets.query(
       `SELECT * FROM pcm_assets WHERE asset_id = $1 AND deleted_at IS NULL`, [req.params.id]
@@ -196,7 +212,7 @@ async function _unwiredStageAdvanceTriggers(assetId, asset, to_stage) {
 }
 
 // ─── GET PIPELINE HISTORY ─────────────────────────────────────────────────────
-router.get('/:id/history', async (req, res, next) => {
+router.get('/:id/history', ownAsset, async (req, res, next) => {
   try {
     const result = await db.assets.query(
       `SELECT * FROM pcm_pipeline_history
@@ -208,7 +224,7 @@ router.get('/:id/history', async (req, res, next) => {
 });
 
 // ─── GET VALUATIONS ───────────────────────────────────────────────────────────
-router.get('/:id/valuations', async (req, res, next) => {
+router.get('/:id/valuations', ownAsset, async (req, res, next) => {
   try {
     const result = await db.assets.query(
       `SELECT valuation_id, appraised_value, currency, appraiser_name,
@@ -312,7 +328,7 @@ router.post('/:id/valuations', authorize('trade_group_owner','program_manager','
 });
 
 // ─── GET SUPPORTING DOCUMENTS ─────────────────────────────────────────────────
-router.get('/:id/documents', async (req, res, next) => {
+router.get('/:id/documents', ownAsset, async (req, res, next) => {
   try {
     const result = await db.assets.query(
       `SELECT doc_id, doc_type, doc_subtype, file_name,
@@ -352,7 +368,7 @@ router.post('/:id/documents', authorize('trade_group_owner','program_manager','i
 });
 
 // ─── GET CLASSIFICATION TOKEN ─────────────────────────────────────────────────
-router.get('/:id/token', async (req, res, next) => {
+router.get('/:id/token', ownAsset, async (req, res, next) => {
   try {
     const result = await db.assets.query(
       `SELECT token_id, asset_type, verified_value, currency, verification_date,
@@ -402,7 +418,7 @@ router.post('/:id/bank-assignment', authorize('trade_group_owner','program_manag
 });
 
 // ─── GET BANK ASSIGNMENT HISTORY ──────────────────────────────────────────────
-router.get('/:id/bank-assignments', async (req, res, next) => {
+router.get('/:id/bank-assignments', ownAsset, async (req, res, next) => {
   try {
     const result = await db.assets.query(
       `SELECT * FROM pcm_bank_assignments

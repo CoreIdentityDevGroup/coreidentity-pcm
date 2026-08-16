@@ -3,7 +3,18 @@
 const express  = require('express');
 const db       = require('../services/db');
 const { authorize } = require('../middleware/authorize');
+const { requireOwnClientOrStaff } = require('../middleware/ownership');
 const router   = express.Router();
+
+// Client-linked GET routes below take agreement_id from the path and look up
+// its owning client_id.
+const ownAgreement = requireOwnClientOrStaff(async req => {
+  const r = await db.forms.query(
+    `SELECT client_id FROM pcm_agreements WHERE agreement_id = $1`,
+    [req.params.id]
+  );
+  return r.rows.length ? r.rows[0].client_id : null;
+});
 
 // ─── GET AGREEMENT TYPES ──────────────────────────────────────────────────────
 router.get('/types', async (_req, res, next) => {
@@ -18,8 +29,12 @@ router.get('/types', async (_req, res, next) => {
 // ─── LIST AGREEMENTS ──────────────────────────────────────────────────────────
 router.get('/', async (req, res, next) => {
   try {
-    const { asset_id, client_id, agreement_type, status,
+    const { asset_id, agreement_type, status,
             pipeline_reference, limit = 50, offset = 0 } = req.query;
+    // Client-role tokens are always scoped to their own client_id, regardless
+    // of any client_id passed in the query string -- combined with an AND on
+    // asset_id below, this also blocks probing another client's asset_id.
+    const client_id = req.user?.role === 'client' ? req.user.client_id : req.query.client_id;
     let query = `SELECT * FROM pcm_agreements WHERE 1=1`;
     const params = [];
 
@@ -39,7 +54,7 @@ router.get('/', async (req, res, next) => {
 });
 
 // ─── GET AGREEMENT ────────────────────────────────────────────────────────────
-router.get('/:id', async (req, res, next) => {
+router.get('/:id', ownAgreement, async (req, res, next) => {
   try {
     const agreement = await db.forms.query(
       `SELECT * FROM pcm_agreements WHERE agreement_id = $1`, [req.params.id]
@@ -188,7 +203,7 @@ router.post('/:id/versions', authorize('trade_group_owner','program_manager'), a
 });
 
 // ─── GET VERSION HISTORY ──────────────────────────────────────────────────────
-router.get('/:id/versions', async (req, res, next) => {
+router.get('/:id/versions', ownAgreement, async (req, res, next) => {
   try {
     const result = await db.forms.query(
       `SELECT * FROM pcm_agreement_versions
@@ -240,7 +255,7 @@ router.patch('/:id/parties/:party_id/sign', authorize('trade_group_owner','progr
 });
 
 // ─── GET MONITORING LOG ───────────────────────────────────────────────────────
-router.get('/:id/monitoring', async (req, res, next) => {
+router.get('/:id/monitoring', ownAgreement, async (req, res, next) => {
   try {
     const { resolved } = req.query;
     let query = `SELECT * FROM pcm_contract_monitoring_log WHERE agreement_id = $1`;
@@ -258,7 +273,11 @@ router.get('/:id/monitoring', async (req, res, next) => {
 });
 
 // ─── LOG MONITORING EVENT ─────────────────────────────────────────────────────
-router.post('/:id/monitoring', async (req, res, next) => {
+// Previously had NO authorize() at all -- any authenticated role, including
+// 'client', could fabricate a monitoring event (arbitrary severity/message/
+// agent_id) against any agreement/asset/client_id, not just their own. Staff
+// tuple matches the other POST-write routes in this file (creation, resolve).
+router.post('/:id/monitoring', authorize('trade_group_owner','program_manager','intake_officer'), async (req, res, next) => {
   try {
     const { asset_id, client_id, pipeline_reference, event_type,
             severity, message, agent_id } = req.body;
@@ -303,7 +322,11 @@ router.patch('/:id/monitoring/:log_id/resolve', authorize('trade_group_owner','p
 });
 
 // ─── GET UNRESOLVED MONITORING ALERTS ─────────────────────────────────────────
-router.get('/monitoring/alerts', async (req, res, next) => {
+// Platform-wide view across every agreement/client -- staff-only, same shape
+// as pipeline/board. No per-agreement scoping is possible here since it's
+// inherently cross-client by design; a 'client' role has no legitimate use
+// for an org-wide alerts feed.
+router.get('/monitoring/alerts', authorize('trade_group_owner','program_manager','intake_officer'), async (req, res, next) => {
   try {
     const result = await db.forms.query(
       `SELECT m.*, a.agreement_type, a.pipeline_reference, a.status as agreement_status

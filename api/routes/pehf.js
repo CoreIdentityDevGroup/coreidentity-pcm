@@ -221,7 +221,12 @@ router.post('/:id/deals', authorize('trade_group_owner','program_manager'), asyn
 });
 
 // ─── LIST DEAL LINKS FOR FUND ─────────────────────────────────────────────────
-router.get('/:id/deals', async (req, res, next) => {
+// pcm_deal_links carries a client_id (which client is linked to this fund,
+// capital committed) -- unlike the rest of this file's fund/bank reference
+// data, this route is client-specific. Staff-only, matching this file's own
+// POST/PATCH tuple -- a 'client' role has no legitimate use for a cross-fund
+// view of deal links (which may include other clients' commitments).
+router.get('/:id/deals', authorize('trade_group_owner','program_manager'), async (req, res, next) => {
   try {
     const { link_status } = req.query;
     let query = `SELECT * FROM pcm_deal_links WHERE fund_id = $1`;
