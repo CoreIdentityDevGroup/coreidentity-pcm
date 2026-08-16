@@ -67,7 +67,12 @@ router.post('/', authorize('trade_group_owner','program_manager','intake_officer
 // ─── LIST DOCUMENTS (by transaction or client) ────────────────────────────────
 router.get('/', async (req, res, next) => {
   try {
-    const { transaction_id, client_id } = req.query;
+    const { transaction_id } = req.query;
+    // Client-role tokens are always scoped to their own client_id, regardless
+    // of any client_id passed in the query string -- combined with an AND on
+    // transaction_id below, this also blocks probing another client's
+    // transaction_id (same reasoning as activity.js's LIST route).
+    const client_id = req.user?.role === 'client' ? req.user.client_id : req.query.client_id;
     if (!transaction_id && !client_id) {
       return res.status(400).json({ error: 'transaction_id or client_id query parameter is required' });
     }

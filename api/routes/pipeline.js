@@ -5,6 +5,7 @@ const { sentinelCheck } = require('../services/governance');
 
 const express  = require('express');
 const { authorize } = require('../middleware/authorize');
+const { requireOwnClientOrStaff } = require('../middleware/ownership');
 const {
   advancePipeline,
   getPipelineStatus,
@@ -13,9 +14,22 @@ const {
 } = require('../services/pipeline');
 const router = express.Router();
 
+// asset_id-scoped routes below look up the owning client_id directly.
+const ownAssetId = requireOwnClientOrStaff(async req => {
+  const db = require('../services/db');
+  const idParam = req.params.asset_id || req.body.asset_id;
+  const r = await db.assets.query(
+    `SELECT client_id FROM pcm_assets WHERE asset_id = $1 AND deleted_at IS NULL`,
+    [idParam]
+  );
+  return r.rows.length ? r.rows[0].client_id : null;
+});
+
 // ─── GET PIPELINE SUMMARY (count by status + recent entries) ──────────────────
 // GET /api/v1/pipeline  — mounted with authenticate in app.js   /* fix-pipeline-summary */
-router.get('/', async (_req, res, next) => {
+// Platform-wide, cross-client (recent transitions across every client) --
+// staff-only, same shape as /board and forms.js's monitoring/alerts.
+router.get('/', authorize('trade_group_owner','program_manager','intake_officer'), async (_req, res, next) => {
   try {
     const db = require('../services/db');
     const byStatus = await db.clients.query(
@@ -48,7 +62,7 @@ router.get('/stages', (_req, res) => {
 });
 
 // ─── GET PIPELINE STATUS FOR ASSET ───────────────────────────────────────────
-router.get('/status/:asset_id', async (req, res, next) => {
+router.get('/status/:asset_id', ownAssetId, async (req, res, next) => {
   try {
     const { client_id } = req.query;
     if (!client_id) return res.status(400).json({ error: 'client_id query param required' });
@@ -85,7 +99,10 @@ router.post('/advance', authorize('trade_group_owner','program_manager','intake_
 });
 
 // ─── VALIDATE GATE (pre-flight check) ─────────────────────────────────────────
-router.post('/validate', async (req, res, next) => {
+// Previously had no authorize() or ownership check at all -- any authenticated
+// role, including 'client', could pre-flight-probe gate blockers for any
+// other party's asset_id.
+router.post('/validate', ownAssetId, async (req, res, next) => {
   try {
     const { asset_id, client_id, to_stage } = req.body;
     if (!asset_id || !client_id || !to_stage) {
@@ -102,7 +119,9 @@ router.post('/validate', async (req, res, next) => {
 });
 
 // ─── GET PIPELINE BOARD (all active assets by stage) ─────────────────────────
-router.get('/board', async (req, res, next) => {
+// Cross-client by design (every active asset org-wide) -- staff-only. A
+// 'client' role has no legitimate use for the full trade pipeline board.
+router.get('/board', authorize('trade_group_owner','program_manager','intake_officer'), async (req, res, next) => {
   try {
     const db = require('../services/db');
     const result = await db.assets.query(

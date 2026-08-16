@@ -4,10 +4,17 @@ const express  = require('express');
 const { v4: uuid } = require('uuid');
 const db       = require('../services/db');
 const { authorize } = require('../middleware/authorize');
+const { requireOwnClientOrStaff } = require('../middleware/ownership');
 const router   = express.Router();
 
+// Client-linked GET routes below take client_id directly from the path.
+const ownClient = requireOwnClientOrStaff(req => req.params.id);
+
 // ─── LIST CLIENTS ─────────────────────────────────────────────────────────────
-router.get('/', async (req, res, next) => {
+// Staff-only: a multi-client listing has no legitimate use for a client-role
+// token (their own record is available via GET /:id). Same staff-role tuple
+// already used for POST/PATCH on this resource, not a new boundary.
+router.get('/', authorize('trade_group_owner','program_manager','intake_officer'), async (req, res, next) => {
   try {
     const { stage, assigned_to, country, limit = 50, offset = 0 } = req.query;
     let query = `SELECT * FROM pcm_clients WHERE deleted_at IS NULL`;
@@ -27,7 +34,7 @@ router.get('/', async (req, res, next) => {
 });
 
 // ─── GET CLIENT ───────────────────────────────────────────────────────────────
-router.get('/:id', async (req, res, next) => {
+router.get('/:id', ownClient, async (req, res, next) => {
   try {
     const result = await db.clients.query(
       `SELECT * FROM pcm_clients WHERE client_id = $1 AND deleted_at IS NULL`,
@@ -150,7 +157,7 @@ router.post('/:id/advance', authorize('trade_group_owner','program_manager','int
 });
 
 // ─── GET CLIENT PIPELINE AUDIT ────────────────────────────────────────────────
-router.get('/:id/audit', async (req, res, next) => {
+router.get('/:id/audit', ownClient, async (req, res, next) => {
   try {
     const result = await db.clients.query(
       `SELECT * FROM pcm_client_pipeline_audit
@@ -162,7 +169,7 @@ router.get('/:id/audit', async (req, res, next) => {
 });
 
 // ─── GET KYC DOCUMENTS ────────────────────────────────────────────────────────
-router.get('/:id/kyc', async (req, res, next) => {
+router.get('/:id/kyc', ownClient, async (req, res, next) => {
   try {
     const result = await db.clients.query(
       `SELECT doc_id, doc_type, doc_subtype, file_name, submission_date,
@@ -207,7 +214,7 @@ router.post('/:id/kyc', authorize('trade_group_owner','program_manager','intake_
 // this pass. Mirrors the KYC document routes above exactly (metadata-only
 // registration, upload via signed URL) -- same GET/POST shape, no PATCH/
 // DELETE, same as pcm_kyc_documents.
-router.get('/:id/id-documents', async (req, res, next) => {
+router.get('/:id/id-documents', ownClient, async (req, res, next) => {
   try {
     const result = await db.clients.query(
       `SELECT id_doc_id, doc_type, id_number, issuing_country, expiry_date,
@@ -247,7 +254,7 @@ router.post('/:id/id-documents', authorize('trade_group_owner','program_manager'
 });
 
 // ─── GET POF RECORDS ──────────────────────────────────────────────────────────
-router.get('/:id/pof', async (req, res, next) => {
+router.get('/:id/pof', ownClient, async (req, res, next) => {
   try {
     const result = await db.clients.query(
       `SELECT pof_id, declared_amount, currency, issuing_bank,
@@ -323,7 +330,7 @@ router.patch('/:id/pof/:pof_id/verify', authorize('trade_group_owner','program_m
 });
 
 // ─── OFAC RESULTS ─────────────────────────────────────────────────────────────
-router.get('/:id/ofac', async (req, res, next) => {
+router.get('/:id/ofac', ownClient, async (req, res, next) => {
   try {
     const result = await db.clients.query(
       `SELECT * FROM pcm_ofac_results

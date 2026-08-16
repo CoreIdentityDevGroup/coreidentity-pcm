@@ -1,10 +1,19 @@
 'use strict';
 const express = require('express');
 const db      = require('../services/db');
+const { authorize } = require('../middleware/authorize');
 const router  = express.Router();
 
+// GET/POST/PATCH below had NO authorize() at all -- any authenticated role,
+// including 'client', could browse every prospect's contact info and
+// referrer relationships, submit fabricated leads, or rewrite any lead's
+// status/notes. Leads are pre-client CRM data with no per-client ownership
+// concept (a lead isn't yet a client record), so staff-only is the correct
+// boundary here, not an ownership check. POST /public and /terms-acceptance
+// are unchanged -- intentionally public intake routes.
+
 // GET /api/v1/leads
-router.get('/', async (req, res) => {
+router.get('/', authorize('trade_group_owner','program_manager','intake_officer'), async (req, res) => {
   const { status, limit = 50 } = req.query;
   try {
     const query = status
@@ -26,7 +35,7 @@ router.get('/', async (req, res) => {
 });
 
 // POST /api/v1/leads
-router.post('/', async (req, res) => {
+router.post('/', authorize('trade_group_owner','program_manager','intake_officer'), async (req, res) => {
   const { client_name, contact_info, service_type,
           referral_type, referrer_id, notes } = req.body;
   if (!client_name)
@@ -49,7 +58,7 @@ router.post('/', async (req, res) => {
 });
 
 // PATCH /api/v1/leads/:id
-router.patch('/:id', async (req, res) => {
+router.patch('/:id', authorize('trade_group_owner','program_manager','intake_officer'), async (req, res) => {
   const { status, notes } = req.body;
   try {
     const result = await db.clients.query(
