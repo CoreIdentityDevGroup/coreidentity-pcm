@@ -7,6 +7,11 @@
 'use strict';
 
 const express      = require('express');
+// Must be required before any router file below -- patches Express 4.x's
+// Router/Route prototypes so a rejected/thrown async handler is routed to
+// the terminal error handler instead of becoming an unhandled rejection.
+// Structural fix so the next handler someone writes is safe by default.
+require('express-async-errors');
 const helmet       = require('helmet');
 const cors         = require('cors');
 const morgan       = require('morgan');
