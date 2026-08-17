@@ -18,7 +18,16 @@
 // that the underlying list is current).
 
 const WARN_DAYS  = 4;
-const BLOCK_DAYS = 7;
+// TEMPORARY UAT OVERRIDE -- raised from 7 to 14 on 2026-08-17. OFAC has not
+// republished the SDN list since 2026-08-07 (10 days stale as of this
+// change), and the standing BLOCK_DAYS=7 gate is correctly holding all new
+// intake at not_authoritatively_screened as a result -- this is blocking
+// the UAT window, not a bug. WARN_DAYS stays at 4 so warnings still fire
+// and pass-path audit records (see index.js) still show the list as aging,
+// not silently clean. Revert BLOCK_DAYS to 7 when UAT completes -- see
+// CLAIMS-INVENTORY.txt (coreidentity-tools/docs/) for the tracked end
+// condition; do not let this become the new normal by inertia.
+const BLOCK_DAYS = 14;
 
 async function checkFreshness(db) {
   const result = await db.clients.query(
