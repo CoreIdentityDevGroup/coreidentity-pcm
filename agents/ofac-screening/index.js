@@ -90,7 +90,10 @@ async function execute(context) {
   const status = match.matched ? 'flagged' : 'clear';
   const compared_fields = {
     ...match.compared,
-    freshness: { status: freshness.status, ageDays: freshness.ageDays, publishDate: freshness.publishDate },
+    freshness: {
+      status: freshness.status, ageDays: freshness.ageDays, publishDate: freshness.publishDate,
+      warnThresholdDays: freshness.warnThresholdDays, blockThresholdDays: freshness.blockThresholdDays,
+    },
   };
 
   await recordResult(db, {
