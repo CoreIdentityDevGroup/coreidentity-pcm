@@ -42,10 +42,18 @@ const crypto = require('crypto');
 const { XMLParser } = require('fast-xml-parser');
 const db = require('../api/services/db');
 const { normalizeName, canonicalizeName } = require('../agents/ofac-screening/lib/normalize');
+const { WARN_DAYS, BLOCK_DAYS } = require('../agents/ofac-screening/lib/freshness');
 
 const SDN_XML_URL = 'https://sanctionslistservice.ofac.treas.gov/api/download/sdn.xml';
 const FETCH_TIMEOUT_MS = 60000;
 const INSERT_BATCH_SIZE = 500;
+// Standing (non-UAT) BLOCK_DAYS value, for comparison against whatever
+// freshness.js's BLOCK_DAYS is currently set to. Duplicated here rather
+// than imported because it has to stay fixed at the documented policy
+// value even while freshness.js's own BLOCK_DAYS is deliberately raised
+// for a UAT window (see CLAIMS-INVENTORY.txt Addendum 36) -- this constant
+// is what "back to normal" means, not whatever the override happens to be.
+const STANDING_BLOCK_DAYS = 7;
 
 function asArray(v) {
   if (v == null) return [];
@@ -166,6 +174,61 @@ async function bulkInsert(client, table, columns, rows) {
   }
 }
 
+let snsClient = null;
+function getSnsClient() {
+  if (snsClient) return snsClient;
+  const { SNSClient } = require('@aws-sdk/client-sns');
+  snsClient = new SNSClient({ region: process.env.AWS_REGION || 'us-east-2' });
+  return snsClient;
+}
+
+// REMAINING-WORK-QUEUE.md Tier 1.1: the freshness gate's BLOCK_DAYS was
+// temporarily raised above its standing value (CLAIMS-INVENTORY.txt
+// Addendum 36) so UAT could proceed past a stale SDN list. One of the
+// three documented revert triggers -- OFAC republishing -- had no way to
+// announce itself; this closes that gap. Fires once per ingest that meets
+// the condition (not once total), so it re-alerts on every run until
+// someone actually reverts BLOCK_DAYS -- deliberate, since a single
+// missed/unread notification should not mean the override goes unnoticed
+// indefinitely. Best-effort and non-fatal: an alert failure must never
+// fail the ingest itself, same reasoning as emitSuccessMetric() in
+// api/routes/scheduled.js.
+async function alertIfRevertConditionMet(ageDays) {
+  if (BLOCK_DAYS <= STANDING_BLOCK_DAYS) return; // no override active, nothing to alert on
+  if (ageDays >= WARN_DAYS) return; // list isn't actually fresh yet
+
+  const topicArn = process.env.SNS_ALERTS_TOPIC_ARN;
+  if (!topicArn) {
+    console.warn(JSON.stringify({
+      level: 'warn',
+      message: 'OFAC freshness revert condition met but SNS_ALERTS_TOPIC_ARN is not set -- cannot alert',
+      ageDays, warnThresholdDays: WARN_DAYS, blockThresholdDaysCurrent: BLOCK_DAYS, blockThresholdDaysStanding: STANDING_BLOCK_DAYS
+    }));
+    return;
+  }
+
+  const message =
+    `OFAC SDN freshness gate revert condition met: the newly-ingested list is ` +
+    `${ageDays} days old (under the ${WARN_DAYS}-day warn threshold), while ` +
+    `BLOCK_DAYS is still overridden at ${BLOCK_DAYS} (standing value ${STANDING_BLOCK_DAYS}). ` +
+    `OFAC has republished -- this override no longer needs to be raised. ` +
+    `Revert agents/ofac-screening/lib/freshness.js BLOCK_DAYS to ${STANDING_BLOCK_DAYS} ` +
+    `and close CLAIMS-INVENTORY.txt Addendum 36 (coreidentity-tools/docs/).`;
+
+  try {
+    const { PublishCommand } = require('@aws-sdk/client-sns');
+    const client = getSnsClient();
+    await client.send(new PublishCommand({
+      TopicArn: topicArn,
+      Subject: 'CoreIdentity: OFAC freshness override can be reverted',
+      Message: message,
+    }));
+    console.log(JSON.stringify({ level: 'info', message: 'Published OFAC freshness revert alert', ageDays, blockThresholdDaysCurrent: BLOCK_DAYS }));
+  } catch (err) {
+    console.error(JSON.stringify({ level: 'error', message: 'Failed to publish OFAC freshness revert alert', error: err.message }));
+  }
+}
+
 async function recordFailedFetch(errorMessage) {
   try {
     await db.clients.query(
@@ -275,6 +338,10 @@ async function runIngest() {
       entries_stored: entryRows.length, aliases_stored: aliasRows.length
     };
     console.log(JSON.stringify({ level: 'info', message: 'SDN ingest complete', ...result }));
+
+    const ageDays = Math.round(((Date.now() - new Date(publishDate).getTime()) / (1000 * 60 * 60 * 24)) * 10) / 10;
+    await alertIfRevertConditionMet(ageDays);
+
     return result;
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
