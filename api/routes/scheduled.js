@@ -148,20 +148,4 @@ router.post('/sdn-ingest', authenticateScheduler('PCM_SDN_INGEST_SCHEDULER_KEY')
   }
 });
 
-// TEMPORARY -- REMAINING-WORK-QUEUE.md Tier 1.1 verification only. Triggers
-// scripts/ofac-sdn-ingest.js's publishTestAlert(), a clearly-marked test
-// message through the real SNS publish path (same client/topic/IAM role as
-// the actual revert-condition alert), to confirm delivery under pcm-api's
-// real task role without faking the freshness condition. Remove this route
-// once delivery is confirmed.
-router.post('/test-sns-alert', authenticateScheduler('PCM_SDN_INGEST_SCHEDULER_KEY'), async (req, res, next) => {
-  try {
-    const { publishTestAlert } = require('../../scripts/ofac-sdn-ingest');
-    const messageId = await publishTestAlert();
-    res.status(200).json({ status: 'published', messageId });
-  } catch (err) {
-    res.status(502).json({ status: 'error', error: err.message });
-  }
-});
-
 module.exports = router;
