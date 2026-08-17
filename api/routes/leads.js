@@ -11,9 +11,14 @@ const router  = express.Router();
 // concept (a lead isn't yet a client record), so staff-only is the correct
 // boundary here, not an ownership check. POST /public and /terms-acceptance
 // are unchanged -- intentionally public intake routes.
+//
+// 2026-08-17 (Intake Officer scope, third revision): intake_officer
+// removed from the three staff-only routes below. Lead management is a
+// different domain from collecting and routing a specific client's
+// package to legal -- not part of "collect and route only."
 
 // GET /api/v1/leads
-router.get('/', authorize('administrator','program_manager','intake_officer'), async (req, res) => {
+router.get('/', authorize('administrator','program_manager'), async (req, res) => {
   const { status, limit = 50 } = req.query;
   try {
     const query = status
@@ -35,7 +40,7 @@ router.get('/', authorize('administrator','program_manager','intake_officer'), a
 });
 
 // POST /api/v1/leads
-router.post('/', authorize('administrator','program_manager','intake_officer'), async (req, res) => {
+router.post('/', authorize('administrator','program_manager'), async (req, res) => {
   const { client_name, contact_info, service_type,
           referral_type, referrer_id, notes } = req.body;
   if (!client_name)
@@ -58,7 +63,7 @@ router.post('/', authorize('administrator','program_manager','intake_officer'), 
 });
 
 // PATCH /api/v1/leads/:id
-router.patch('/:id', authorize('administrator','program_manager','intake_officer'), async (req, res) => {
+router.patch('/:id', authorize('administrator','program_manager'), async (req, res) => {
   const { status, notes } = req.body;
   try {
     const result = await db.clients.query(

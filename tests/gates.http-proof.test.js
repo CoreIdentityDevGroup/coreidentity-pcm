@@ -27,6 +27,13 @@ afterAll(async () => {
   await Promise.all([db.clients.end(), db.assets.end(), db.forms.end(), db.pehf.end()]);
 });
 
+// 2026-08-17 (Intake Officer scope, third revision): tests below switched
+// from intake_officer to program_manager for /pipeline/advance calls --
+// Intake Officer no longer has route-level access to this endpoint at all
+// (routes/pipeline.js POST /advance), so these generic gate-enforcement
+// proofs (not specifically about Intake Officer's access) needed an actor
+// who still has it. Separately, kyc_verification's gate_roles itself also
+// flipped to program_manager -- see services/pipeline.js's STAGES.
 describe('Step 4d — real HTTP proof of gate enforcement', () => {
   test('POST /api/v1/pipeline/advance with missing evidence -> real HTTP 422, not silently 200', async () => {
     const client_id = await fx.createClient();
@@ -34,7 +41,7 @@ describe('Step 4d — real HTTP proof of gate enforcement', () => {
 
     const res = await request(app)
       .post('/api/v1/pipeline/advance')
-      .set('Authorization', `Bearer ${tokenFor('intake_officer')}`)
+      .set('Authorization', `Bearer ${tokenFor('program_manager')}`)
       .send({ asset_id, client_id, to_stage: 'kyc_verification' });
 
     expect(res.status).toBe(422);
@@ -64,7 +71,7 @@ describe('Step 4d — real HTTP proof of gate enforcement', () => {
 
     const res = await request(app)
       .post('/api/v1/pipeline/advance')
-      .set('Authorization', `Bearer ${tokenFor('intake_officer')}`)
+      .set('Authorization', `Bearer ${tokenFor('program_manager')}`)
       .send({ asset_id, client_id, to_stage: 'kyc_verification' });
 
     expect(res.status).toBe(200);
@@ -82,10 +89,15 @@ describe('Step 4d — real HTTP proof of gate enforcement', () => {
     await fx.confirmOfacAttestation(client_id);
     await fx.confirmLegalAttestation(client_id, asset_id);
 
-    // kyc_verification's gate_roles is ['intake_officer'] (explicit set,
-    // not a hierarchy -- 2026-08-17 redesign); Administrator passes every
-    // gate by definition. 'system' is in neither category and is
-    // deliberately rejected here.
+    // kyc_verification's gate_roles is ['program_manager'] (explicit set,
+    // not a hierarchy -- 2026-08-17 redesign, flipped from
+    // ['intake_officer'] the same day -- see STAGES' comment);
+    // Administrator passes every gate by definition. 'system' is in
+    // neither category and is deliberately rejected here. Intake Officer
+    // would ALSO be rejected now (both by this gate and, more
+    // fundamentally, by the route itself no longer accepting them at
+    // all), not tested separately here since 'system' already proves the
+    // route-level rejection path.
     const res = await request(app)
       .post('/api/v1/pipeline/advance')
       .set('Authorization', `Bearer ${tokenFor('system')}`)
@@ -104,7 +116,7 @@ describe('Step 4d — real HTTP proof of gate enforcement', () => {
 
     const toKyc = await request(app)
       .post('/api/v1/pipeline/advance')
-      .set('Authorization', `Bearer ${tokenFor('intake_officer')}`)
+      .set('Authorization', `Bearer ${tokenFor('program_manager')}`)
       .send({ asset_id, client_id, to_stage: 'kyc_verification' });
     expect(toKyc.status).toBe(200);
 

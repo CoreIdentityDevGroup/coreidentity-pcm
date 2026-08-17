@@ -87,7 +87,7 @@ describe('Legal-review attestation — asset-scoped, two-step entry/countersign'
     const client_id = await fx.createClient();
     const { asset_id } = await fx.createAsset(client_id);
     await fx.addKycDocument(client_id);
-    await fx.addPofRecord(client_id);
+    const pof = await fx.addPofRecord(client_id);
     await fx.confirmOfacAttestation(client_id);
 
     const beforeErrors = await validateGate('kyc_verification', asset_id, client_id);
@@ -107,9 +107,22 @@ describe('Legal-review attestation — asset-scoped, two-step entry/countersign'
     expect(assetRow.rows[0].assigned_handler_role).toBe('intake_officer');
     expect(assetRow.rows[0].assigned_handler_staff_id).toBe(io.staff.staff_id);
 
+    // 2026-08-17 (Intake Officer scope, third revision): the assigned
+    // handler also records legal's POF outcome, same review event, same
+    // gate requirement now -- linked to this attestation.
+    const pofRes = await request(app)
+      .patch(`/api/v1/clients/${client_id}/pof/${pof}/legal-outcome`)
+      .set('Authorization', `Bearer ${io.token}`)
+      .send({ outcome: 'approved', attestation_id: entryRes.body.attestation_id });
+    expect(pofRes.status).toBe(200);
+
     const pendingErrors = await validateGate('kyc_verification', asset_id, client_id);
-    expect(pendingErrors).toEqual(expect.arrayContaining(['Legal attestation recorded but not yet countersigned by an Administrator']));
+    expect(pendingErrors).toEqual(expect.arrayContaining(['Legal attestation recorded but not yet countersigned']));
     expect(pendingErrors).not.toContain('No legal-review attestation on file');
+    // POF outcome is recorded (approved) but its linked attestation isn't
+    // confirmed yet -- same one-countersign-covers-both mechanism should
+    // report the POF side as still pending too.
+    expect(pendingErrors).toEqual(expect.arrayContaining(['Proof of Funds outcome recorded but the underlying legal attestation is not yet countersigned']));
 
     const admin = await staffToken('administrator');
     const countersignRes = await request(app)
@@ -119,6 +132,9 @@ describe('Legal-review attestation — asset-scoped, two-step entry/countersign'
     expect(countersignRes.status).toBe(200);
     expect(countersignRes.body.status).toBe('confirmed');
 
+    // The single countersign above -- on the attestation only -- also
+    // satisfies the POF side of the gate now, without a second
+    // countersign step (Todd, explicit: "one countersign covers both").
     const afterErrors = await validateGate('kyc_verification', asset_id, client_id);
     expect(afterErrors).toEqual([]);
   });
@@ -461,17 +477,27 @@ describe('Retention floor — one-year regulatory minimum, verified against the 
 });
 
 describe('Additive owner-based access — assignment adds a path, does not exclude anyone', () => {
-  test('an assigned Program Manager gains kyc_verification access (normally Intake-Officer-only) for THAT asset', async () => {
+  // 2026-08-17 (Intake Officer scope, third revision): kyc_verification's
+  // gate_roles flipped from ['intake_officer'] to ['program_manager'] --
+  // Intake Officer no longer advances anything (routes/pipeline.js POST
+  // /advance no longer accepts them at all, so this stage's
+  // checkRoleAuthority check is unreachable for them via any live route).
+  // These three tests demonstrated the ownership/additive path using
+  // Program Manager on kyc_verification, which is now moot for that role
+  // (gate_roles grants it directly) -- roles swapped so the tests still
+  // demonstrate something real: an assigned Intake Officer gaining access
+  // to a stage gate_roles no longer grants them.
+  test('an assigned Intake Officer gains kyc_verification access (now Program-Manager-only via gate_roles) for THAT asset', async () => {
     const client_id = await fx.createClient();
     const { asset_id } = await fx.createAsset(client_id);
     await fx.addKycDocument(client_id);
     await fx.addPofRecord(client_id);
     await fx.confirmOfacAttestation(client_id);
 
-    const assignedPm = await staffToken('program_manager');
+    const assignedIo = await staffToken('intake_officer');
     const entryRes = await request(app)
       .post(`/api/v1/assets/${asset_id}/legal-attestation`)
-      .set('Authorization', `Bearer ${assignedPm.token}`)
+      .set('Authorization', `Bearer ${assignedIo.token}`)
       .send({ counsel_name: 'X', review_date: '2026-08-17', reference: 'Y', outcome: 'approved' });
     expect(entryRes.status).toBe(201);
     const admin = await staffToken('administrator');
@@ -487,31 +513,31 @@ describe('Additive owner-based access — assignment adds a path, does not exclu
     // not a disconnected hand-picked one.
     const auth = checkRoleAuthority(
       'kyc_verification',
-      { role: 'program_manager', staff_id: assignedPm.staff.staff_id },
+      { role: 'intake_officer', staff_id: assignedIo.staff.staff_id },
       undefined,
-      { assigned_handler_role: 'program_manager', assigned_handler_staff_id: assignedPm.staff.staff_id }
+      { assigned_handler_role: 'intake_officer', assigned_handler_staff_id: assignedIo.staff.staff_id }
     );
     expect(auth.authorized).toBe(true);
 
-    // A DIFFERENT, unassigned Program Manager must NOT get this via
+    // A DIFFERENT, unassigned Intake Officer must NOT get this via
     // ownership -- gate_roles alone still says no for kyc_verification.
     const otherAuth = checkRoleAuthority(
       'kyc_verification',
-      { role: 'program_manager', staff_id: 'some-other-pm-id' },
+      { role: 'intake_officer', staff_id: 'some-other-io-id' },
       undefined,
-      { assigned_handler_role: 'program_manager', assigned_handler_staff_id: assignedPm.staff.staff_id }
+      { assigned_handler_role: 'intake_officer', assigned_handler_staff_id: assignedIo.staff.staff_id }
     );
     expect(otherAuth.authorized).toBe(false);
   });
 
-  test('additive, not exclusive: an UNASSIGNED Intake Officer still has normal kyc_verification access on an asset assigned to a Program Manager', () => {
+  test('additive, not exclusive: an UNASSIGNED Program Manager still has normal kyc_verification access on an asset assigned to an Intake Officer', () => {
     const auth = checkRoleAuthority(
       'kyc_verification',
-      { role: 'intake_officer', staff_id: 'some-other-io-id' },
+      { role: 'program_manager', staff_id: 'some-other-pm-id' },
       undefined,
-      { assigned_handler_role: 'program_manager', assigned_handler_staff_id: 'assigned-pm-id' }
+      { assigned_handler_role: 'intake_officer', assigned_handler_staff_id: 'assigned-io-id' }
     );
-    // gate_roles.includes('intake_officer') is still true regardless of
+    // gate_roles.includes('program_manager') is still true regardless of
     // who this asset is assigned to -- assignment only ever adds a path,
     // never removes the normal one. This is the specific behavior
     // confirmed this session: exclusive ownership was considered and
@@ -520,8 +546,8 @@ describe('Additive owner-based access — assignment adds a path, does not exclu
   });
 
   test('no assignment on the asset -- ownership path simply does not apply, normal gate_roles behavior unchanged', () => {
-    expect(checkRoleAuthority('kyc_verification', { role: 'program_manager', staff_id: 'x' }, undefined, null).authorized).toBe(false);
-    expect(checkRoleAuthority('kyc_verification', { role: 'program_manager', staff_id: 'x' }, undefined, {}).authorized).toBe(false);
+    expect(checkRoleAuthority('kyc_verification', { role: 'intake_officer', staff_id: 'x' }, undefined, null).authorized).toBe(false);
+    expect(checkRoleAuthority('kyc_verification', { role: 'intake_officer', staff_id: 'x' }, undefined, {}).authorized).toBe(false);
   });
 });
 
@@ -543,30 +569,94 @@ describe('Explicit permission sets — no inheritance between Program Manager an
     expect(res.status).toBe(403);
   });
 
-  test('Adjustment 1: POF verification stays Program Manager, not Intake Officer', async () => {
+  // 2026-08-17 (Intake Officer scope, third revision): "Adjustment 1: POF
+  // verification stays Program Manager, not Intake Officer" is gone --
+  // its entire premise (a Program-Manager-performed POF verification
+  // action) no longer exists. Replaced with tests for what it became:
+  // PATCH .../pof/:pof_id/legal-outcome, recording legal's POF decision,
+  // open to Intake Officer or Program Manager (same gate as legal-
+  // attestation entry), requiring a real attestation_id.
+  test('POF legal-outcome recording is open to Intake Officer and Program Manager, not Administrator-only or Program-Manager-only', async () => {
     const client_id = await fx.createClient();
-    const pof = await fx.addPofRecord(client_id);
-    const ioRes = await request(app)
-      .patch(`/api/v1/clients/${client_id}/pof/${pof}/verify`)
-      .set('Authorization', `Bearer ${tokenFor('intake_officer')}`)
-      .send({ verification_notes: 'n/a' });
-    expect(ioRes.status).toBe(403);
+    const { asset_id } = await fx.createAsset(client_id);
+    const io = await staffToken('intake_officer');
+    const entryRes = await request(app)
+      .post(`/api/v1/assets/${asset_id}/legal-attestation`)
+      .set('Authorization', `Bearer ${io.token}`)
+      .send({ counsel_name: 'X', review_date: '2026-08-17', reference: 'Y', outcome: 'approved' });
+    expect(entryRes.status).toBe(201);
 
+    const pof = await fx.addPofRecord(client_id);
     const pmRes = await request(app)
-      .patch(`/api/v1/clients/${client_id}/pof/${pof}/verify`)
+      .patch(`/api/v1/clients/${client_id}/pof/${pof}/legal-outcome`)
       .set('Authorization', `Bearer ${tokenFor('program_manager')}`)
-      .send({ verification_notes: 'checked' });
+      .send({ outcome: 'approved', attestation_id: entryRes.body.attestation_id });
     expect(pmRes.status).toBe(200);
+    expect(pmRes.body.outcome).toBe('approved');
+    expect(pmRes.body.attestation_id).toBe(entryRes.body.attestation_id);
   });
 
-  test('Adjustment 2: Referrers and Leads keep all three staff roles, unchanged', async () => {
-    for (const role of ['administrator', 'program_manager', 'intake_officer']) {
+  test('POF legal-outcome recording rejects a missing or malformed attestation_id', async () => {
+    const client_id = await fx.createClient();
+    const pof = await fx.addPofRecord(client_id);
+    const noAttestation = await request(app)
+      .patch(`/api/v1/clients/${client_id}/pof/${pof}/legal-outcome`)
+      .set('Authorization', `Bearer ${tokenFor('intake_officer')}`)
+      .send({ outcome: 'approved' });
+    expect(noAttestation.status).toBe(400);
+
+    const fakeAttestation = await request(app)
+      .patch(`/api/v1/clients/${client_id}/pof/${pof}/legal-outcome`)
+      .set('Authorization', `Bearer ${tokenFor('intake_officer')}`)
+      .send({ outcome: 'approved', attestation_id: '00000000-0000-0000-0000-000000000000' });
+    expect(fakeAttestation.status).toBe(404);
+  });
+
+  test('POF legal-outcome recording is no-supersede, same rule as legal attestation entry', async () => {
+    const client_id = await fx.createClient();
+    const { asset_id } = await fx.createAsset(client_id);
+    const io = await staffToken('intake_officer');
+    const entryRes = await request(app)
+      .post(`/api/v1/assets/${asset_id}/legal-attestation`)
+      .set('Authorization', `Bearer ${io.token}`)
+      .send({ counsel_name: 'X', review_date: '2026-08-17', reference: 'Y', outcome: 'approved' });
+
+    const pof = await fx.addPofRecord(client_id);
+    const first = await request(app)
+      .patch(`/api/v1/clients/${client_id}/pof/${pof}/legal-outcome`)
+      .set('Authorization', `Bearer ${tokenFor('program_manager')}`)
+      .send({ outcome: 'approved', attestation_id: entryRes.body.attestation_id });
+    expect(first.status).toBe(200);
+
+    const second = await request(app)
+      .patch(`/api/v1/clients/${client_id}/pof/${pof}/legal-outcome`)
+      .set('Authorization', `Bearer ${tokenFor('program_manager')}`)
+      .send({ outcome: 'denied', attestation_id: entryRes.body.attestation_id });
+    expect(second.status).toBe(409);
+  });
+
+  // 2026-08-17 (Intake Officer scope, third revision): Adjustment 2
+  // inverted -- referral-source/lead management is a different domain
+  // from collecting and routing a specific client's package to legal,
+  // not part of "collect and route only." Intake Officer is now excluded.
+  test('Adjustment 2 (revised): Referrers and Leads narrow to Administrator and Program Manager, Intake Officer excluded', async () => {
+    for (const role of ['administrator', 'program_manager']) {
       const res = await request(app)
         .get('/api/v1/referrers')
         .set('Authorization', `Bearer ${tokenFor(role)}`)
         .query({ type: 'Law Firms' });
       expect(res.status).toBe(200);
     }
+    const ioRes = await request(app)
+      .get('/api/v1/referrers')
+      .set('Authorization', `Bearer ${tokenFor('intake_officer')}`)
+      .query({ type: 'Law Firms' });
+    expect(ioRes.status).toBe(403);
+
+    const ioLeadsRes = await request(app)
+      .get('/api/v1/leads')
+      .set('Authorization', `Bearer ${tokenFor('intake_officer')}`);
+    expect(ioLeadsRes.status).toBe(403);
   });
 
   test('Administrator passes every route regardless of listed roles (strict superset)', async () => {
@@ -589,16 +679,27 @@ describe('Pipeline gate_roles — explicit sets, not a hierarchy', () => {
     expect(result.authorized).toBe(false);
   });
 
-  test('Program Manager is rejected for kyc_verification (Intake Officer stage) -- the actual point of "explicit sets, not a hierarchy"', () => {
-    // Under the old >= hierarchy, program_manager (2) inherited every
-    // intake_officer (1) gate automatically -- this is the specific
-    // behavior the redesign was for.
-    const result = checkRoleAuthority('kyc_verification', { role: 'program_manager', staff_id: 'x' }, undefined, null);
+  // 2026-08-17 (Intake Officer scope, third revision): kyc_verification's
+  // gate_roles flipped from ['intake_officer'] to ['program_manager'] --
+  // see routes/pipeline.js POST /advance and services/pipeline.js's
+  // STAGES comment. Worth stating plainly: with this change, Intake
+  // Officer no longer has ANY entry in STAGES.gate_roles reachable via a
+  // live route (their 'intake' stage entry was already dead code before
+  // today -- confirmed while making this change, no valid isValidTransition
+  // path ever reaches to_stage:'intake', since assets start there via
+  // direct creation, not advancePipeline()). Program Manager is now the
+  // only non-Administrator human role with pipeline-advancement authority
+  // anywhere in STAGES. The "explicit sets, not hierarchy" pairing below
+  // is Intake Officer/kyc_verification (rejected) vs. Program Manager on
+  // both of its own stages (authorized) -- there's no longer a second
+  // human role with its own separate stage to contrast against.
+  test('Intake Officer is rejected for kyc_verification (now Program Manager\'s stage) -- explicit sets, not a hierarchy', () => {
+    const result = checkRoleAuthority('kyc_verification', { role: 'intake_officer', staff_id: 'x' }, undefined, null);
     expect(result.authorized).toBe(false);
   });
 
-  test('Intake Officer is authorized for kyc_verification, Program Manager for appraisal_review (each role\'s own stage)', () => {
-    expect(checkRoleAuthority('kyc_verification', { role: 'intake_officer', staff_id: 'x' }, undefined, null).authorized).toBe(true);
+  test('Program Manager is authorized for both kyc_verification and appraisal_review (both are Program Manager\'s stages now)', () => {
+    expect(checkRoleAuthority('kyc_verification', { role: 'program_manager', staff_id: 'x' }, undefined, null).authorized).toBe(true);
     expect(checkRoleAuthority('appraisal_review', { role: 'program_manager', staff_id: 'x' }, undefined, null).authorized).toBe(true);
   });
 

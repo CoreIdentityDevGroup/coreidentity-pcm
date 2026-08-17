@@ -74,7 +74,18 @@ router.get('/status/:asset_id', ownAssetId, async (req, res, next) => {
 });
 
 // ─── ADVANCE PIPELINE STAGE ───────────────────────────────────────────────────
-router.post('/advance', authorize('administrator','program_manager','intake_officer'), async (req, res, next) => {
+// 2026-08-17 (Intake Officer scope, third revision): intake_officer
+// removed. "Collects the package and routes it to legal. That is the
+// whole job... no advancing past intake" -- this is literally the
+// advance action. STAGES.kyc_verification.gate_roles below updated to
+// match (program_manager, not intake_officer) since this route-level
+// gate is the only live path to checkRoleAuthority's stage-specific
+// check for a human actor -- an intake_officer assigned as legal's
+// handler still can't reach it even via isAssignedHandler, since they
+// never pass this outer authorize() at all. Recording what legal
+// decided (legal-attestation entry/countersign, POF outcome) stays with
+// Intake Officer; moving the deal forward to the next stage does not.
+router.post('/advance', authorize('administrator','program_manager'), async (req, res, next) => {
   try {
     const { asset_id, client_id, to_stage, notes } = req.body;
 

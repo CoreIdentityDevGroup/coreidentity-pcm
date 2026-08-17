@@ -49,11 +49,17 @@ describe('kyc_verification gate', () => {
     const { asset_id } = await fx.createAsset(client_id);
     await fx.addKycDocument(client_id);
     await fx.addPofRecord(client_id);
+    // 2026-08-17 (Intake Officer scope, third revision): POF now needs a
+    // recorded, countersign-confirmed legal outcome, not just a record on
+    // file -- confirmLegalAttestation's fixture auto-links/satisfies it
+    // (see its comment), isolating this test back down to the one thing
+    // it's meant to check: OFAC never screened.
+    await fx.confirmLegalAttestation(client_id, asset_id);
     // ofac_status defaults to 'pending' -- never screened
 
     const errors = await validateGate('kyc_verification', asset_id, client_id);
     expect(errors.length).toBeGreaterThan(0);
-    expect(errors[0]).toMatch(/OFAC screening not satisfied/);
+    expect(errors).toEqual(expect.arrayContaining([expect.stringMatching(/OFAC screening not satisfied/)]));
   });
 
   test('legacy/unrecognized ofac_status (e.g. stale "clear") -> blocks, not silently accepted', async () => {
@@ -65,11 +71,15 @@ describe('kyc_verification gate', () => {
     const { asset_id } = await fx.createAsset(client_id);
     await fx.addKycDocument(client_id);
     await fx.addPofRecord(client_id);
+    // 2026-08-17 (Intake Officer scope, third revision): same as above --
+    // satisfy POF's new outcome requirement so this test isolates the
+    // OFAC failure mode it's actually about.
+    await fx.confirmLegalAttestation(client_id, asset_id);
     await db.clients.query(`UPDATE pcm_clients SET ofac_status = 'clear' WHERE client_id = $1`, [client_id]);
 
     const errors = await validateGate('kyc_verification', asset_id, client_id);
     expect(errors.length).toBeGreaterThan(0);
-    expect(errors[0]).toMatch(/OFAC screening not satisfied/);
+    expect(errors).toEqual(expect.arrayContaining([expect.stringMatching(/OFAC screening not satisfied/)]));
   });
 
   test('full evidence + confirmed out-of-band attestation -> passes gate check', async () => {

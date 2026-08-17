@@ -89,18 +89,55 @@ async function confirmOfacAttestation(client_id) {
 // real FK to pcm_staff, so this creates a throwaway staff row unless one
 // is passed in -- a plain string like the old fixture's
 // 'fixture-principal-2' would violate the constraint.
+//
+// 2026-08-17 (Intake Officer scope, third revision): also links and
+// confirms the client's POF outcome, matching the real "one countersign
+// covers both" design (migration 0016) -- if an addPofRecord() fixture
+// call already produced an unrecorded POF row for this client, this
+// stamps it with the same outcome and links it to the new attestation.
+// Silently does nothing if no such row exists (some tests deliberately
+// don't call addPofRecord first, e.g. testing the "No Proof of Funds"
+// failure path) -- this is a convenience default, not a required side
+// effect, same spirit as every other fixture here.
 async function confirmLegalAttestation(client_id, asset_id, overrides = {}) {
   const assignedStaffId = overrides.assigned_staff_id || (await createStaff({ role: 'intake_officer' })).staff_id;
   // outcome required NOT NULL since db/migrations/0015 -- defaults to
   // 'approved' since every existing caller of this fixture wants "gate
   // satisfied", not a denial.
-  await db.clients.query(
+  const outcome = overrides.outcome || 'approved';
+  const result = await db.clients.query(
     `INSERT INTO pcm_legal_attestations
        (client_id, asset_id, counsel_name, review_date, reference, outcome, entered_by, status,
         countersigned_by, countersigned_at, assigned_role, assigned_staff_id)
      VALUES ($1, $2, 'Fixture Counsel', CURRENT_DATE, 'fixture-reference', $5, 'fixture-principal-1', 'confirmed',
-             'fixture-principal-2', NOW(), $3, $4)`,
-    [client_id, asset_id, overrides.assigned_role || 'intake_officer', assignedStaffId, overrides.outcome || 'approved']
+             'fixture-principal-2', NOW(), $3, $4)
+     RETURNING attestation_id`,
+    [client_id, asset_id, overrides.assigned_role || 'intake_officer', assignedStaffId, outcome]
+  );
+  const attestationId = result.rows[0].attestation_id;
+
+  if (overrides.linkPof !== false) {
+    await db.clients.query(
+      `UPDATE pcm_pof_records
+       SET outcome = $1, entered_by = 'fixture-principal-2', entered_at = NOW(), attestation_id = $2
+       WHERE client_id = $3 AND outcome IS NULL AND vault_status = 'active'`,
+      [outcome, attestationId, client_id]
+    );
+  }
+
+  return attestationId;
+}
+
+// Records a POF outcome directly, for tests that need fine-grained
+// control over the POF/attestation link independent of
+// confirmLegalAttestation's default auto-link (e.g. an approved POF
+// outcome whose linked attestation is deliberately NOT yet confirmed).
+async function confirmPofOutcome(client_id, pof_id, attestation_id, overrides = {}) {
+  await db.clients.query(
+    `UPDATE pcm_pof_records
+     SET outcome = $1, entered_by = 'fixture-principal-2', entered_at = NOW(), attestation_id = $2
+     WHERE client_id = $3 AND pof_id = $4`,
+    [overrides.outcome || 'approved', attestation_id, client_id, pof_id]
   );
 }
 
@@ -188,6 +225,6 @@ async function createStaff(overrides = {}) {
 
 module.exports = {
   createClient, createAsset, addKycDocument, addPofRecord, confirmOfacAttestation,
-  confirmLegalAttestation, addValuation, addAssetDocument, setInstrumentIntegrityVerified,
+  confirmLegalAttestation, confirmPofOutcome, addValuation, addAssetDocument, setInstrumentIntegrityVerified,
   setBankAssignment, addExecutedAgreement, mintClassificationToken, createStaff
 };

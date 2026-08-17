@@ -13,7 +13,13 @@ const { normalizeRole, isAdministrator } = require('../middleware/authorize');
 // automated, gated on a recorded system check result, not a human role.
 const STAGES = {
   intake:           { order: 1, gate_roles: ['intake_officer'],  label: 'Intake and Document Receipt' },
-  kyc_verification: { order: 2, gate_roles: ['intake_officer'],  label: 'KYC / CIS / POF Verification' },
+  // 2026-08-17 (Intake Officer scope, third revision): intake_officer ->
+  // program_manager. Intake Officer no longer advances anything -- see
+  // routes/pipeline.js POST /advance's header comment. This is the only
+  // live path a human actor has to this check for this stage, so leaving
+  // 'intake_officer' here after removing it from that route would be a
+  // stale, unreachable permission entry, not a real one.
+  kyc_verification: { order: 2, gate_roles: ['program_manager'], label: 'KYC / CIS / POF Verification' },
   appraisal_review: { order: 3, gate_roles: ['program_manager'], label: 'Appraisal / Valuation Review' },
   bank_assignment:  { order: 4, gate_roles: [],                  label: 'Trader Bank Assignment' },   // Administrator only
   collateralization:{ order: 5, gate_roles: [],                  label: 'Collateralization' },        // Administrator only
@@ -58,16 +64,43 @@ const GATE_REQUIREMENTS = {
       `SELECT COUNT(*) FROM pcm_kyc_documents
        WHERE client_id = $1 AND vault_status = 'active'`, [client_id]
     );
+    // 2026-08-17 (Intake Officer scope, third revision): previously only
+    // checked a POF record EXISTS, never whether it passed (flagged as a
+    // known gap in the OFAC-branch style below, now closed the same way).
+    // Legal now verifies POF as part of the same review that produces the
+    // legal attestation (migration 0016) -- checked here by joining each
+    // POF record to its linked attestation, not by a second independent
+    // confirmation step. A client's approved-and-confirmed POF outcome
+    // satisfies this for every asset that client holds, not just the one
+    // whose review produced it (see 0016's header) -- LEFT JOIN across all
+    // of the client's active POF records, not scoped to this asset_id.
     const pof = await db.clients.query(
-      `SELECT COUNT(*) FROM pcm_pof_records
-       WHERE client_id = $1 AND vault_status = 'active'`, [client_id]
+      `SELECT po.pof_id, po.outcome, la.status AS attestation_status
+       FROM pcm_pof_records po
+       LEFT JOIN pcm_legal_attestations la ON la.attestation_id = po.attestation_id
+       WHERE po.client_id = $1 AND po.vault_status = 'active'
+       ORDER BY po.created_at DESC`, [client_id]
     );
     const ofac = await db.clients.query(
       `SELECT ofac_status FROM pcm_clients WHERE client_id = $1`, [client_id]
     );
     const errors = [];
     if (parseInt(kyc.rows[0].count) === 0) errors.push('No KYC documents on file');
-    if (parseInt(pof.rows[0].count) === 0) errors.push('No Proof of Funds on file');
+
+    if (pof.rows.length === 0) {
+      errors.push('No Proof of Funds on file');
+    } else {
+      const pofSatisfied = pof.rows.some(r => r.outcome === 'approved' && r.attestation_status === 'confirmed');
+      if (!pofSatisfied) {
+        if (pof.rows.some(r => r.outcome === 'denied')) {
+          errors.push('Proof of Funds verification denied by legal — package cannot proceed');
+        } else if (pof.rows.some(r => r.outcome === 'approved' && r.attestation_status !== 'confirmed')) {
+          errors.push('Proof of Funds outcome recorded but the underlying legal attestation is not yet countersigned');
+        } else {
+          errors.push('Proof of Funds on file but not yet verified by legal');
+        }
+      }
+    }
 
     // CLOSE-GAP-27: allowlist, not blocklist. Enumerating only the bad
     // values previously let 'clear' -- an unauthoritative heuristic
@@ -152,7 +185,10 @@ const GATE_REQUIREMENTS = {
       if (legalRow?.status === 'confirmed' && legalRow.outcome === 'denied') {
         errors.push('Legal review denied — package rejected, cannot proceed');
       } else if (legalRow?.status === 'pending_countersign') {
-        errors.push('Legal attestation recorded but not yet countersigned by an Administrator');
+        // Stale wording fixed in passing (found while touching this
+        // function for the POF gate change above): countersign was
+        // widened to all three roles this session, not Administrator-only.
+        errors.push('Legal attestation recorded but not yet countersigned');
       } else {
         errors.push('No legal-review attestation on file');
       }
