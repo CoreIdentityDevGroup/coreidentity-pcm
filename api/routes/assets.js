@@ -548,13 +548,46 @@ router.post('/:id/legal-attestation', authorize('intake_officer', 'program_manag
 // case. Only once COUNTERSIGNED does a denied outcome automatically move
 // the asset to 'rejected' -- reusing advancePipeline() itself (not a raw
 // UPDATE) so the transition gets the same validity check, audit trail
-// row, and Sentinel gate every other stage change gets. 'rejected' is
-// Administrator-only in gate_roles, and this route already required an
-// Administrator to reach this point, so the countersigning
-// Administrator's own req.user is the correct actor for the transition
-// -- there's no second authorization decision being made here, just the
-// consequence of the one already made.
-router.patch('/:id/legal-attestation/:attestation_id/countersign', authorize('administrator'), async (req, res, next) => {
+// row, and Sentinel gate every other stage change gets.
+//
+// COUNTERSIGN ROLE, widened (2026-08-17, second correction): any of the
+// three roles may countersign, not Administrator-only -- in practice
+// primarily Intake Officer or Program Manager. The distinct-principal
+// check below is unchanged and is what actually protects this: the
+// countersigner must differ from whoever entered the attestation,
+// regardless of which role either of them holds.
+//
+// This widening breaks an assumption the denial-rejection code below
+// used to be able to make: 'rejected' is Administrator-only in
+// gate_roles, so passing the countersigning req.user straight through to
+// advancePipeline() would 403 for a Program Manager or Intake Officer
+// countersigner (unless they happened to also be this asset's assigned
+// handler, which by the distinct-principal rule they specifically are
+// not).
+//
+// NOT fixed by adding 'system' to 'rejected'.gate_roles (considered and
+// rejected while writing this): checkRoleAuthority's system-gated branch
+// is a full early-return that REPLACES the human-role check with a
+// systemCheck-object requirement -- it would also change what
+// POST /pipeline/reject needs from an ordinary human Administrator,
+// breaking the existing working case to fix this one.
+//
+// Fixed instead by authorizing the internal advancePipeline() call with
+// a role-overridden actor: same sub/staff_id as the real countersigning
+// principal (so transitioned_by / the notes field below both show who
+// actually did this -- accountability preserved), role forced to
+// 'administrator' only for this one call, since isAdministrator() passes
+// every gate unconditionally. This is legitimate, not a bypass: the real
+// authorization decision already happened one step up (this route's own
+// authorize() + the distinct-principal check), the same as the
+// countersign-is-a-consequence-not-a-new-decision reasoning that
+// originally justified reusing req.user here at all. Known, accepted
+// imprecision: transition_role on this one row will read
+// 'administrator' even when the real countersigner is a Program Manager
+// or Intake Officer -- reflects the trust level the action was actually
+// authorized at, not a literal role claim, and the notes field spells
+// out who actually countersigned in plain text for anyone auditing this.
+router.patch('/:id/legal-attestation/:attestation_id/countersign', authorize('administrator', 'program_manager', 'intake_officer'), async (req, res, next) => {
   try {
     const existing = await db.clients.query(
       `SELECT * FROM pcm_legal_attestations WHERE attestation_id = $1 AND asset_id = $2`,
@@ -592,12 +625,15 @@ router.patch('/:id/legal-attestation/:attestation_id/countersign', authorize('ad
     let rejection = null;
     if (attestation.outcome === 'denied') {
       const { advancePipeline } = require('../services/pipeline');
+      // role forced to 'administrator' for this one call only -- see this
+      // route's header comment for why (real identity preserved via sub/
+      // staff_id, the actual authorization already happened above).
       rejection = await advancePipeline({
         asset_id: req.params.id,
         client_id: attestation.client_id,
         to_stage: 'rejected',
-        user: req.user,
-        notes: `Automatic: legal review denied (attestation ${attestation.attestation_id}, countersigned by ${countersignedBy})`
+        user: { sub: req.user.sub, staff_id: req.user.staff_id, role: 'administrator' },
+        notes: `Automatic: legal review denied (attestation ${attestation.attestation_id}, countersigned by ${countersignedBy}, actual role ${req.user.role})`
       });
       if (!rejection.success) {
         // Fail loudly, not silently -- a denial that couldn't actually

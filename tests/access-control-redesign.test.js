@@ -190,7 +190,30 @@ describe('Legal-review attestation — asset-scoped, two-step entry/countersign'
     expect(row.rows[0].status).toBe('pending_countersign');
   });
 
-  test('Intake Officer cannot countersign (Administrator only)', async () => {
+  // Inverted 2026-08-17 (second correction): countersign widened from
+  // Administrator-only to all three roles -- primarily Intake Officer or
+  // Program Manager in practice. The distinct-principal check is what
+  // actually protects this, not the role gate -- covered by the three
+  // tests below, one per role pairing.
+  test('a DIFFERENT Intake Officer can countersign an Intake Officer\'s entry', async () => {
+    const client_id = await fx.createClient();
+    const { asset_id } = await fx.createAsset(client_id);
+    const io1 = await staffToken('intake_officer');
+    const entryRes = await request(app)
+      .post(`/api/v1/assets/${asset_id}/legal-attestation`)
+      .set('Authorization', `Bearer ${io1.token}`)
+      .send({ counsel_name: 'X', review_date: '2026-08-17', reference: 'Y', outcome: 'approved' });
+    expect(entryRes.status).toBe(201);
+
+    const io2 = await staffToken('intake_officer');
+    const countersignRes = await request(app)
+      .patch(`/api/v1/assets/${asset_id}/legal-attestation/${entryRes.body.attestation_id}/countersign`)
+      .set('Authorization', `Bearer ${io2.token}`)
+      .send({});
+    expect(countersignRes.status).toBe(200);
+  });
+
+  test('a Program Manager can countersign an Intake Officer\'s entry', async () => {
     const client_id = await fx.createClient();
     const { asset_id } = await fx.createAsset(client_id);
     const io = await staffToken('intake_officer');
@@ -200,11 +223,32 @@ describe('Legal-review attestation — asset-scoped, two-step entry/countersign'
       .send({ counsel_name: 'X', review_date: '2026-08-17', reference: 'Y', outcome: 'approved' });
     expect(entryRes.status).toBe(201);
 
-    const ioCountersign = await request(app)
+    const pm = await staffToken('program_manager');
+    const countersignRes = await request(app)
       .patch(`/api/v1/assets/${asset_id}/legal-attestation/${entryRes.body.attestation_id}/countersign`)
-      .set('Authorization', `Bearer ${tokenFor('intake_officer', 'io3@example.test')}`)
+      .set('Authorization', `Bearer ${pm.token}`)
       .send({});
-    expect(ioCountersign.status).toBe(403);
+    expect(countersignRes.status).toBe(200);
+  });
+
+  test('distinct-principal check still applies regardless of role -- the same Intake Officer cannot countersign under a different-looking token', async () => {
+    const client_id = await fx.createClient();
+    const { asset_id } = await fx.createAsset(client_id);
+    const io = await fx.createStaff({ role: 'intake_officer' });
+    const entryRes = await request(app)
+      .post(`/api/v1/assets/${asset_id}/legal-attestation`)
+      .set('Authorization', `Bearer ${tokenFor('intake_officer', io.email, io.staff_id)}`)
+      .send({ counsel_name: 'X', review_date: '2026-08-17', reference: 'Y', outcome: 'approved' });
+    expect(entryRes.status).toBe(201);
+
+    // Same person, same role -- widening countersign to Intake Officer
+    // must not accidentally widen it to "any Intake Officer including
+    // yourself."
+    const selfCountersign = await request(app)
+      .patch(`/api/v1/assets/${asset_id}/legal-attestation/${entryRes.body.attestation_id}/countersign`)
+      .set('Authorization', `Bearer ${tokenFor('intake_officer', io.email, io.staff_id)}`)
+      .send({});
+    expect(selfCountersign.status).toBe(403);
   });
 
   test('outcome is required and must be approved or denied -- no default, no third value', async () => {
@@ -270,6 +314,43 @@ describe('Denial — same dual control as approval, terminal only once countersi
     const history = await db.assets.query(`SELECT to_stage, transitioned_by FROM pcm_pipeline_history WHERE asset_id = $1 ORDER BY created_at DESC LIMIT 1`, [asset_id]);
     expect(history.rows[0].to_stage).toBe('rejected');
     expect(history.rows[0].transitioned_by).toBe(admin.staff.email);
+  });
+
+  // Regression test for the exact interaction the countersign-widening
+  // correction created: 'rejected' is Administrator-only in gate_roles,
+  // so a Program Manager countersigning a denial would 403 inside the
+  // internal advancePipeline() call unless that call's actor is
+  // specifically authorized around this -- see the countersign route's
+  // header comment for the fix (role-overridden synthetic actor,
+  // real identity preserved). Without that fix, this exact test is what
+  // would have failed.
+  test('a Program Manager countersigning a denial still triggers the automatic rejection (the interaction a naive countersign-widening would have broken)', async () => {
+    const client_id = await fx.createClient();
+    const { asset_id } = await fx.createAsset(client_id);
+    const io = await staffToken('intake_officer');
+
+    const entryRes = await request(app)
+      .post(`/api/v1/assets/${asset_id}/legal-attestation`)
+      .set('Authorization', `Bearer ${io.token}`)
+      .send({ counsel_name: 'X', review_date: '2026-08-17', reference: 'Denied', outcome: 'denied' });
+    expect(entryRes.status).toBe(201);
+
+    const pm = await staffToken('program_manager');
+    const countersignRes = await request(app)
+      .patch(`/api/v1/assets/${asset_id}/legal-attestation/${entryRes.body.attestation_id}/countersign`)
+      .set('Authorization', `Bearer ${pm.token}`)
+      .send({});
+    expect(countersignRes.status).toBe(200);
+    expect(countersignRes.body.auto_rejected).toBe(true);
+    expect(countersignRes.body.rejection_result.success).toBe(true);
+
+    const assetRow = await db.assets.query(`SELECT pipeline_stage FROM pcm_assets WHERE asset_id = $1`, [asset_id]);
+    expect(assetRow.rows[0].pipeline_stage).toBe('rejected');
+
+    // Real identity preserved in the audit trail despite the role
+    // override used to pass the internal gate check.
+    const history = await db.assets.query(`SELECT to_stage, transitioned_by, transition_role FROM pcm_pipeline_history WHERE asset_id = $1 ORDER BY created_at DESC LIMIT 1`, [asset_id]);
+    expect(history.rows[0].transitioned_by).toBe(pm.staff.email);
   });
 
   test('rejected via denial is genuinely terminal -- cannot advance back out, same as any other rejection', async () => {
