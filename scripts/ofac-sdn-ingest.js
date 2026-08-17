@@ -229,6 +229,34 @@ async function alertIfRevertConditionMet(ageDays) {
   }
 }
 
+// TEMPORARY -- REMAINING-WORK-QUEUE.md Tier 1.1 verification only. Publishes
+// a clearly-marked test message via the exact same SNSClient/topic/IAM role
+// as alertIfRevertConditionMet(), WITHOUT evaluating or faking the freshness
+// condition -- proves IAM + SDK delivery end-to-end under pcm-api's real
+// task role. Remove this function and its call site (api/routes/scheduled.js
+// POST /test-sns-alert) once delivery is confirmed.
+async function publishTestAlert() {
+  const topicArn = process.env.SNS_ALERTS_TOPIC_ARN;
+  if (!topicArn) throw new Error('SNS_ALERTS_TOPIC_ARN not set');
+  const { PublishCommand } = require('@aws-sdk/client-sns');
+  const client = getSnsClient();
+  const result = await client.send(new PublishCommand({
+    TopicArn: topicArn,
+    Subject: 'CoreIdentity: TEST -- OFAC revert-alert publish path (not a real alert)',
+    Message:
+      'This is a one-off manual test of the SNS publish path used by the OFAC ' +
+      'freshness revert-condition alert (REMAINING-WORK-QUEUE.md Tier 1.1, ' +
+      'agents/ofac-screening freshness gate). No freshness condition was ' +
+      'evaluated or faked -- this call bypasses alertIfRevertConditionMet() ' +
+      'entirely and publishes directly through the same SNSClient, topic, and ' +
+      'pcm-api task IAM role the real alert uses. Triggered manually to ' +
+      'confirm end-to-end delivery. No action needed; this test path is ' +
+      'removed from the codebase once delivery is confirmed.',
+  }));
+  console.log(JSON.stringify({ level: 'info', message: 'Published test SNS alert', messageId: result.MessageId }));
+  return result.MessageId;
+}
+
 async function recordFailedFetch(errorMessage) {
   try {
     await db.clients.query(
@@ -369,4 +397,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { parseSdn, parsePublishDate, runIngest };
+module.exports = { parseSdn, parsePublishDate, runIngest, publishTestAlert };
