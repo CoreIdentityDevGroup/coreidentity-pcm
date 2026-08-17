@@ -84,12 +84,20 @@ async function confirmOfacAttestation(client_id) {
 // directly rather than calling the API mirrors the DB state a real
 // confirmed attestation leaves behind, same convention as
 // confirmOfacAttestation above.
-async function confirmLegalAttestation(client_id) {
+// asset_id is required (2026-08-17 correction -- attestation is
+// asset-scoped, assignment is by asset type). assigned_staff_id has a
+// real FK to pcm_staff, so this creates a throwaway staff row unless one
+// is passed in -- a plain string like the old fixture's
+// 'fixture-principal-2' would violate the constraint.
+async function confirmLegalAttestation(client_id, asset_id, overrides = {}) {
+  const assignedStaffId = overrides.assigned_staff_id || (await createStaff({ role: 'intake_officer' })).staff_id;
   await db.clients.query(
     `INSERT INTO pcm_legal_attestations
-       (client_id, counsel_name, review_date, reference, entered_by, status, countersigned_by, countersigned_at)
-     VALUES ($1, 'Fixture Counsel', CURRENT_DATE, 'fixture-reference', 'fixture-principal-1', 'confirmed', 'fixture-principal-2', NOW())`,
-    [client_id]
+       (client_id, asset_id, counsel_name, review_date, reference, entered_by, status,
+        countersigned_by, countersigned_at, assigned_role, assigned_staff_id)
+     VALUES ($1, $2, 'Fixture Counsel', CURRENT_DATE, 'fixture-reference', 'fixture-principal-1', 'confirmed',
+             'fixture-principal-2', NOW(), $3, $4)`,
+    [client_id, asset_id, overrides.assigned_role || 'intake_officer', assignedStaffId]
   );
 }
 

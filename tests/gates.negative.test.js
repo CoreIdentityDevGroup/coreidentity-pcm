@@ -78,7 +78,7 @@ describe('kyc_verification gate', () => {
     await fx.addKycDocument(client_id);
     await fx.addPofRecord(client_id);
     await fx.confirmOfacAttestation(client_id);
-  await fx.confirmLegalAttestation(client_id);
+  await fx.confirmLegalAttestation(client_id, asset_id);
 
     const errors = await validateGate('kyc_verification', asset_id, client_id);
     expect(errors).toEqual([]);

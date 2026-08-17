@@ -60,7 +60,7 @@ describe('Step 4d — real HTTP proof of gate enforcement', () => {
     await fx.addKycDocument(client_id);
     await fx.addPofRecord(client_id);
     await fx.confirmOfacAttestation(client_id);
-    await fx.confirmLegalAttestation(client_id);
+    await fx.confirmLegalAttestation(client_id, asset_id);
 
     const res = await request(app)
       .post('/api/v1/pipeline/advance')
@@ -80,7 +80,7 @@ describe('Step 4d — real HTTP proof of gate enforcement', () => {
     await fx.addKycDocument(client_id);
     await fx.addPofRecord(client_id);
     await fx.confirmOfacAttestation(client_id);
-    await fx.confirmLegalAttestation(client_id);
+    await fx.confirmLegalAttestation(client_id, asset_id);
 
     // kyc_verification's gate_roles is ['intake_officer'] (explicit set,
     // not a hierarchy -- 2026-08-17 redesign); Administrator passes every
@@ -100,7 +100,7 @@ describe('Step 4d — real HTTP proof of gate enforcement', () => {
     await fx.addKycDocument(client_id);
     await fx.addPofRecord(client_id);
     await fx.confirmOfacAttestation(client_id);
-    await fx.confirmLegalAttestation(client_id);
+    await fx.confirmLegalAttestation(client_id, asset_id);
 
     const toKyc = await request(app)
       .post('/api/v1/pipeline/advance')

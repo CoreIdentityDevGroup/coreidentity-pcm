@@ -566,97 +566,10 @@ router.patch('/:id/ofac/override/:result_id/countersign', authorize('administrat
   } catch (err) { next(err); }
 });
 
-// ─── RECORD LEGAL-REVIEW ATTESTATION (step 1 of 2) ───────────────────────────
-// 2026-08-17 access-control redesign. Counsel is internal to the platform
-// owners but external to CoreG -- no portal account, never performs the
-// review inside this system. The platform only records that it happened:
-// who reviewed, when, and a reference -- not a boolean. Modeled directly
-// on the OFAC out-of-band attestation two-step above, same reasoning:
-// separation of duties requires a principal DIFFERENT from whoever entered
-// this to countersign before it satisfies the kyc_verification gate
-// (GATE_REQUIREMENTS.kyc_verification, api/services/pipeline.js).
-router.post('/:id/legal-attestation', authorize('intake_officer'), async (req, res, next) => {
-  try {
-    const { counsel_name, review_date, reference } = req.body;
-    if (!counsel_name || !counsel_name.trim()) {
-      return res.status(400).json({ error: 'counsel_name is required — name the reviewing counsel' });
-    }
-    if (!review_date || !review_date.trim()) {
-      return res.status(400).json({ error: 'review_date is required — when counsel actually reviewed' });
-    }
-    if (!reference || !reference.trim()) {
-      return res.status(400).json({ error: 'reference is required — matter number, memo reference, or a reason' });
-    }
-
-    const client = await db.clients.query(
-      `SELECT client_id FROM pcm_clients WHERE client_id = $1 AND deleted_at IS NULL`,
-      [req.params.id]
-    );
-    if (!client.rows.length) return res.status(404).json({ error: 'Client not found' });
-
-    const enteredBy = req.user.sub || req.user.email;
-    const result = await db.clients.query(
-      `INSERT INTO pcm_legal_attestations
-        (client_id, counsel_name, review_date, reference, entered_by)
-       VALUES ($1,$2,$3,$4,$5)
-       RETURNING *`,
-      [req.params.id, counsel_name, review_date, reference, enteredBy]
-    );
-
-    res.status(201).json({
-      attestation_id: result.rows[0].attestation_id,
-      status:          'pending_countersign',
-      message:         'Legal attestation recorded. A different principal (Administrator) must countersign before this affects the KYC gate.',
-      entered_by:      enteredBy
-    });
-  } catch (err) { next(err); }
-});
-
-// ─── COUNTERSIGN LEGAL-REVIEW ATTESTATION (step 2 of 2) ──────────────────────
-// Administrator-only, per this session's separation-of-duties decision:
-// Intake Officer both registers compliance evidence (KYC/POF) and would be
-// the one entering this record, so countersigning it too would put the
-// same principal on both ends of the one check meant to catch a
-// fabricated or rubber-stamped entry. Only after this succeeds does the
-// attestation satisfy GATE_REQUIREMENTS.kyc_verification.
-router.patch('/:id/legal-attestation/:attestation_id/countersign', authorize('administrator'), async (req, res, next) => {
-  try {
-    const existing = await db.clients.query(
-      `SELECT * FROM pcm_legal_attestations WHERE attestation_id = $1 AND client_id = $2`,
-      [req.params.attestation_id, req.params.id]
-    );
-    if (!existing.rows.length) return res.status(404).json({ error: 'Attestation not found' });
-
-    const attestation = existing.rows[0];
-    if (attestation.status !== 'pending_countersign') {
-      return res.status(409).json({ error: `Attestation is not pending countersign (current state: ${attestation.status})` });
-    }
-
-    const countersignedBy = req.user.sub || req.user.email;
-    if (attestation.entered_by === countersignedBy) {
-      return res.status(403).json({ error: 'Cannot countersign your own attestation entry — dual control requires a different principal' });
-    }
-
-    const updated = await db.clients.query(
-      `UPDATE pcm_legal_attestations
-       SET status = 'confirmed', countersigned_by = $1, countersigned_at = NOW()
-       WHERE attestation_id = $2
-       RETURNING *`,
-      [countersignedBy, req.params.attestation_id]
-    );
-
-    const governance = require('../services/governance');
-    await governance.salLog({
-      agent_id: countersignedBy,
-      action:   'LEGAL_ATTESTATION_COUNTERSIGNED',
-      resource: `pcm:client:${req.params.id}`,
-      decision: 'ALLOW',
-      context:  { entered_by: attestation.entered_by, countersigned_by: countersignedBy, attestation_id: req.params.attestation_id }
-    }).catch(() => {});
-
-    res.json(updated.rows[0]);
-  } catch (err) { next(err); }
-});
+// Legal-review attestation routes moved to api/routes/assets.js
+// (POST/PATCH /:id/legal-attestation) -- corrected 2026-08-17, same day:
+// the decision is asset-level (legal assigns a handler by asset type),
+// matching where valuations/documents already live, not client-level.
 
 // ─── SOFT DELETE CLIENT ───────────────────────────────────────────────────────
 router.delete('/:id', authorize('administrator'), async (req, res, next) => {

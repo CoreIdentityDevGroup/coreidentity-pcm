@@ -2,7 +2,7 @@
 
 const express  = require('express');
 const db       = require('../services/db');
-const { authorize } = require('../middleware/authorize');
+const { authorize, normalizeRole } = require('../middleware/authorize');
 const { requireOwnClientOrStaff } = require('../middleware/ownership');
 const router   = express.Router();
 
@@ -426,6 +426,130 @@ router.get('/:id/bank-assignments', ownAsset, async (req, res, next) => {
       [req.params.id]
     );
     res.json({ bank_assignments: result.rows });
+  } catch (err) { next(err); }
+});
+
+// ─── RECORD LEGAL-REVIEW ATTESTATION (step 1 of 2) ───────────────────────────
+// 2026-08-17 access-control redesign, corrected same day: legal doesn't
+// just review, they DECIDE WHO HANDLES the package (by asset type and
+// expertise) -- an Intake Officer or a Program Manager. Counsel is
+// internal to the platform owners but external to CoreG -- no portal
+// account, never performs the review inside this system. Asset-scoped
+// (not client-scoped): a client can hold multiple assets of different
+// types, each routed to a different handler -- matches where
+// valuations/documents already live, not clients.js.
+//
+// assigned_staff_id / assigned_role come from req.user, NEVER from the
+// request body -- the submitter IS the assignment (legal's decision was
+// communicated out-of-band; this route is where the person legal picked
+// identifies themselves by submitting it). Accepting these as
+// caller-supplied fields would let anyone claim an assignment on someone
+// else's behalf.
+//
+// Writes two things in one place: the pcm_legal_attestations row (the
+// immutable historical record) and pcm_assets' assigned_handler_role/
+// assigned_handler_staff_id (the live pointer checkRoleAuthority reads).
+// Both reflect the assignment the moment it's claimed -- countersign
+// (below) verifies the ATTESTATION is legitimate, it doesn't gate
+// ownership taking effect.
+router.post('/:id/legal-attestation', authorize('intake_officer', 'program_manager'), async (req, res, next) => {
+  try {
+    const { counsel_name, review_date, reference } = req.body;
+    if (!counsel_name || !counsel_name.trim()) {
+      return res.status(400).json({ error: 'counsel_name is required — name the reviewing counsel' });
+    }
+    if (!review_date || !review_date.trim()) {
+      return res.status(400).json({ error: 'review_date is required — when counsel actually reviewed' });
+    }
+    if (!reference || !reference.trim()) {
+      return res.status(400).json({ error: 'reference is required — matter number, memo reference, or a reason' });
+    }
+
+    const asset = await db.assets.query(
+      `SELECT asset_id, client_id FROM pcm_assets WHERE asset_id = $1 AND deleted_at IS NULL`,
+      [req.params.id]
+    );
+    if (!asset.rows.length) return res.status(404).json({ error: 'Asset not found' });
+    const { client_id } = asset.rows[0];
+
+    // Administrator can enter too (superset rule, confirmed explicitly) --
+    // assigned_role/assigned_handler_role allow 'administrator' as a real
+    // value for exactly this case (see db/migrations/0013a/0013b's
+    // comments). The stored role is purely descriptive; ownership
+    // authority is decided by staff_id match, not this value -- an
+    // Administrator-assigned asset is already fully accessible to that
+    // Administrator regardless.
+    const submitterRole = normalizeRole(req.user.role);
+    const enteredBy = req.user.sub || req.user.email;
+    const staffId = req.user.staff_id;
+
+    const result = await db.clients.query(
+      `INSERT INTO pcm_legal_attestations
+        (client_id, asset_id, counsel_name, review_date, reference, entered_by, assigned_role, assigned_staff_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+       RETURNING *`,
+      [client_id, req.params.id, counsel_name, review_date, reference, enteredBy, submitterRole, staffId]
+    );
+
+    await db.assets.query(
+      `UPDATE pcm_assets SET assigned_handler_role = $1, assigned_handler_staff_id = $2 WHERE asset_id = $3`,
+      [submitterRole, staffId, req.params.id]
+    );
+
+    res.status(201).json({
+      attestation_id: result.rows[0].attestation_id,
+      status:          'pending_countersign',
+      assigned_role:   submitterRole,
+      message:         'Legal attestation recorded and handler assigned. A different principal (Administrator) must countersign before this affects the KYC gate.',
+      entered_by:      enteredBy
+    });
+  } catch (err) { next(err); }
+});
+
+// ─── COUNTERSIGN LEGAL-REVIEW ATTESTATION (step 2 of 2) ──────────────────────
+// Administrator-only. Now explicitly load-bearing, not just consistent
+// with the OFAC pattern: the handler is recording their OWN assignment
+// (self-referential by design, see the entry route above), so this
+// countersign is the ONLY independent check that legal actually made
+// this call -- there is no second person on the entry side the way
+// KYC-registration/OFAC-screening naturally has one. Only after this
+// succeeds does the attestation satisfy GATE_REQUIREMENTS.kyc_verification.
+router.patch('/:id/legal-attestation/:attestation_id/countersign', authorize('administrator'), async (req, res, next) => {
+  try {
+    const existing = await db.clients.query(
+      `SELECT * FROM pcm_legal_attestations WHERE attestation_id = $1 AND asset_id = $2`,
+      [req.params.attestation_id, req.params.id]
+    );
+    if (!existing.rows.length) return res.status(404).json({ error: 'Attestation not found' });
+
+    const attestation = existing.rows[0];
+    if (attestation.status !== 'pending_countersign') {
+      return res.status(409).json({ error: `Attestation is not pending countersign (current state: ${attestation.status})` });
+    }
+
+    const countersignedBy = req.user.sub || req.user.email;
+    if (attestation.entered_by === countersignedBy) {
+      return res.status(403).json({ error: 'Cannot countersign your own attestation entry — dual control requires a different principal' });
+    }
+
+    const updated = await db.clients.query(
+      `UPDATE pcm_legal_attestations
+       SET status = 'confirmed', countersigned_by = $1, countersigned_at = NOW()
+       WHERE attestation_id = $2
+       RETURNING *`,
+      [countersignedBy, req.params.attestation_id]
+    );
+
+    const governance = require('../services/governance');
+    await governance.salLog({
+      agent_id: countersignedBy,
+      action:   'LEGAL_ATTESTATION_COUNTERSIGNED',
+      resource: `pcm:asset:${req.params.id}`,
+      decision: 'ALLOW',
+      context:  { entered_by: attestation.entered_by, countersigned_by: countersignedBy, attestation_id: req.params.attestation_id, assigned_role: attestation.assigned_role, assigned_staff_id: attestation.assigned_staff_id }
+    }).catch(() => {});
+
+    res.json(updated.rows[0]);
   } catch (err) { next(err); }
 });
 

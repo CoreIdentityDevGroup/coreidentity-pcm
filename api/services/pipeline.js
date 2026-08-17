@@ -121,17 +121,22 @@ const GATE_REQUIREMENTS = {
       errors.push(`OFAC screening not satisfied (status: ${ofacStatus || 'none'}) — requires an authoritative real-engine clear result, a confirmed dual-control override (engine flagged a match), or a confirmed out-of-band attestation (engine could not authoritatively screen)`);
     }
 
-    // Legal review, 2026-08-17 access-control redesign: counsel is
-    // internal to the platform owners but external to CoreG, has no
-    // portal account, and never performs the review inside this system --
-    // the platform only records that it happened (see
-    // pcm_legal_attestations / api/routes/clients.js's legal-attestation
-    // routes). Distinguishing "no attestation" from "entered but not yet
-    // countersigned" here, same as the OFAC branch above distinguishes
-    // its own sub-states, rather than collapsing both into one message.
+    // Legal review, 2026-08-17 access-control redesign (corrected
+    // 2026-08-17, same day -- legal also assigns a handler, not just
+    // reviews): counsel is internal to the platform owners but external
+    // to CoreG, has no portal account, and never performs the review
+    // inside this system -- the platform only records that it happened
+    // (see pcm_legal_attestations / api/routes/assets.js's
+    // legal-attestation routes). Asset-scoped, not just client-scoped --
+    // assignment is by asset type, so a client with multiple assets can
+    // route each to a different handler; the lookup narrows to this
+    // specific asset, not "any attestation on this client." Distinguishing
+    // "no attestation" from "entered but not yet countersigned" here, same
+    // as the OFAC branch above distinguishes its own sub-states, rather
+    // than collapsing both into one message.
     const legal = await db.clients.query(
       `SELECT status FROM pcm_legal_attestations
-       WHERE client_id = $1 ORDER BY entered_at DESC LIMIT 1`, [client_id]
+       WHERE client_id = $1 AND asset_id = $2 ORDER BY entered_at DESC LIMIT 1`, [client_id, asset_id]
     );
     const legalStatus = legal.rows[0]?.status;
     if (legalStatus !== 'confirmed') {
@@ -311,7 +316,30 @@ async function validateGate(to_stage, asset_id, client_id) {
 // the caller and passed in as systemCheck) must have run and recorded a
 // pass. No recorded result — systemCheck missing or not evaluated — blocks,
 // same as a failed one. Human-role hierarchy logic below is unchanged.
-function checkRoleAuthority(to_stage, user_role, systemCheck) {
+//
+// DELIBERATELY SYNCHRONOUS. Assigned-handler access (2026-08-17 legal-
+// attestation redesign) needs pcm_assets.assigned_handler_staff_id, which
+// looks like it would require this function to become async and take
+// asset_id, do its own query. It doesn't: advancePipeline() already
+// fetches the asset row before calling this (to check the requested
+// transition is structurally valid) -- widening that one existing query
+// to also select the two ownership columns and passing them in as
+// assetOwnership means this function never touches the DB itself. That
+// was a deliberate choice, not an oversight: an async version, called
+// from advancePipeline's `const auth = checkRoleAuthority(...)` without
+// an added `await`, would assign a Promise to `auth`. `auth.authorized`
+// on a Promise is `undefined`, and the call site already checks
+// `auth.authorized !== true` below -- so even that specific mistake would
+// fail closed (403), not open. But "the bug fails safe if you also get a
+// second thing right" is worse than "the bug can't happen," and a
+// missed-await defect is exactly the kind of thing that passes every
+// test which only exercises the happy path (the broken state still LOOKS
+// like a normal object property access, nothing throws) -- see
+// tests/access-control-redesign.test.js's explicit regression test for
+// this, which calls this function without any await and asserts the
+// return value is a plain object, not a thenable, so the question is
+// structurally moot rather than merely defended against.
+function checkRoleAuthority(to_stage, user, systemCheck, assetOwnership) {
   const stage = STAGES[to_stage];
   if (!stage) return { authorized: false, reason: `Unknown stage: ${to_stage}` };
 
@@ -333,16 +361,30 @@ function checkRoleAuthority(to_stage, user_role, systemCheck) {
 
   // Explicit permission set, not a >= hierarchy. Administrator passes
   // every gate by definition (isAdministrator, alias-aware for
-  // pre-rename tokens); everyone else must appear in this stage's own
-  // gate_roles list -- no inheritance between Program Manager and Intake
-  // Officer.
-  const authorized = isAdministrator(user_role) || stage.gate_roles.includes(normalizeRole(user_role));
+  // pre-rename tokens). Additive third path (2026-08-17): the asset's
+  // assigned handler (pcm_assets.assigned_handler_staff_id, set at legal-
+  // attestation entry) may also act, regardless of this stage's own
+  // gate_roles -- "the assigned handler carries the package through to
+  // completion." Deliberately additive, not exclusive: this ADDS a path
+  // for the handler, it does not remove anyone else's normal gate_roles
+  // access (an unassigned Intake Officer can still do kyc_verification
+  // work on an asset assigned to a Program Manager). Exclusive ownership
+  // was considered and rejected -- see this session's design report:
+  // it makes every package a single point of failure and forces
+  // reassignment tooling immediately; tightening later is a config
+  // change, loosening after people rely on exclusivity is not.
+  const isAssignedHandler = !!(assetOwnership?.assigned_handler_staff_id &&
+    assetOwnership.assigned_handler_staff_id === user.staff_id);
+
+  const authorized = isAdministrator(user.role) ||
+    stage.gate_roles.includes(normalizeRole(user.role)) ||
+    isAssignedHandler;
 
   if (!authorized) {
     const required = stage.gate_roles.length ? stage.gate_roles.join(' or ') : 'Administrator';
     return {
       authorized: false,
-      reason: `Stage '${to_stage}' requires role '${required}'. Current role: '${user_role}'`
+      reason: `Stage '${to_stage}' requires role '${required}' (or being this asset's assigned handler). Current role: '${user.role}'`
     };
   }
   return { authorized: true };
@@ -373,8 +415,12 @@ async function advancePipeline({ asset_id, client_id, to_stage, user, notes }) {
   // ordered after the gate check, e.g. resuming on_hold to a stage
   // that's both structurally wrong AND missing its own evidence would
   // report the latter, masking the real problem).
+  // assigned_handler_role/assigned_handler_staff_id selected here (not a
+  // separate query) specifically so checkRoleAuthority can stay
+  // synchronous -- see that function's header comment.
   const asset = await db.assets.query(
-    `SELECT pipeline_stage, pipeline_reference FROM pcm_assets WHERE asset_id = $1`, [asset_id]
+    `SELECT pipeline_stage, pipeline_reference, assigned_handler_role, assigned_handler_staff_id
+     FROM pcm_assets WHERE asset_id = $1`, [asset_id]
   );
   const client = await db.clients.query(
     `SELECT pipeline_stage FROM pcm_clients WHERE client_id = $1 AND deleted_at IS NULL`, [client_id]
@@ -416,8 +462,18 @@ async function advancePipeline({ asset_id, client_id, to_stage, user, notes }) {
   }
 
   // 1. Role authority check (unchanged for human-gated stages)
-  const auth = checkRoleAuthority(to_stage, user.role, systemCheck);
-  if (!auth.authorized) {
+  const assetOwnership = {
+    assigned_handler_role: asset.rows[0].assigned_handler_role,
+    assigned_handler_staff_id: asset.rows[0].assigned_handler_staff_id
+  };
+  const auth = checkRoleAuthority(to_stage, user, systemCheck, assetOwnership);
+  // Strict `!== true`, not `!auth.authorized` -- belt-and-suspenders per
+  // this session's explicit instruction to verify a missed-await-shaped
+  // mistake can't read as authorized. checkRoleAuthority is synchronous
+  // (see its own header comment for why), so `auth` can't actually be a
+  // Promise here today -- this guards the invariant anyway, at zero cost,
+  // in case that ever changes without this comment being re-read.
+  if (auth.authorized !== true) {
     return {
       success: false, code: 403, error: auth.reason,
       block_reason: (systemCheck && !systemCheck.passed) ? 'blocked_pending' : undefined

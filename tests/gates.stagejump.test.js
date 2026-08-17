@@ -63,7 +63,7 @@ test('correctly sequenced single-step advance still succeeds (regression guard: 
   await fx.addKycDocument(client_id);
   await fx.addPofRecord(client_id);
   await fx.confirmOfacAttestation(client_id);
-  await fx.confirmLegalAttestation(client_id);
+  await fx.confirmLegalAttestation(client_id, asset_id);
 
   const result = await advancePipeline({
     asset_id, client_id, to_stage: 'kyc_verification',
@@ -93,7 +93,7 @@ test('on_hold can only resume to the exact stage it was held from, reconstructed
   await fx.addKycDocument(client_id);
   await fx.addPofRecord(client_id);
   await fx.confirmOfacAttestation(client_id);
-  await fx.confirmLegalAttestation(client_id);
+  await fx.confirmLegalAttestation(client_id, asset_id);
 
   // Advance to kyc_verification for real, then hold.
   const toKyc = await advancePipeline({ asset_id, client_id, to_stage: 'kyc_verification', user: { sub: 'test-fixture', role: 'trade_group_owner' } });
