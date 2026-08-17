@@ -53,7 +53,7 @@ router.get('/:id', ownAsset, async (req, res, next) => {
 });
 
 // ─── CREATE ASSET ─────────────────────────────────────────────────────────────
-router.post('/', authorize('trade_group_owner','program_manager','intake_officer'), async (req, res, next) => {
+router.post('/', authorize('program_manager'), async (req, res, next) => {
   try {
     const { client_id, asset_type, asset_subtype, description,
             location, declared_value, currency, notes } = req.body;
@@ -127,7 +127,7 @@ router.post('/', authorize('trade_group_owner','program_manager','intake_officer
 });
 
 // ─── UPDATE ASSET ─────────────────────────────────────────────────────────────
-router.patch('/:id', authorize('trade_group_owner','program_manager','intake_officer'), async (req, res, next) => {
+router.patch('/:id', authorize('program_manager'), async (req, res, next) => {
   try {
     const allowed = ['asset_subtype','description','location','declared_value',
                      'currency','bank_assignment','bank_swift_code','notes'];
@@ -161,7 +161,7 @@ router.patch('/:id', authorize('trade_group_owner','program_manager','intake_off
 // call — a second, unguarded path to the same transition that
 // POST /api/v1/pipeline/advance already gates. Route kept (not deleted) so
 // a caller gets 410 Gone instead of a 404 that could pass for a typo.
-router.post('/:id/advance', authorize('trade_group_owner','program_manager','intake_officer'), (req, res) => {
+router.post('/:id/advance', authorize('program_manager'), (req, res) => {
   res.status(410).json({
     error:       'Gone',
     message:     'This endpoint no longer advances pipeline stage. It performed no role-authority, gate, or Sentinel checks. Use POST /api/v1/pipeline/advance instead.',
@@ -237,7 +237,7 @@ router.get('/:id/valuations', ownAsset, async (req, res, next) => {
 });
 
 // ─── SUBMIT VALUATION (with same-date enforcement) ────────────────────────────
-router.post('/:id/valuations', authorize('trade_group_owner','program_manager','intake_officer'), async (req, res, next) => {
+router.post('/:id/valuations', authorize('program_manager'), async (req, res, next) => {
   try {
     const { appraised_value, currency, appraiser_name, appraiser_organization,
             appraiser_license, appraisal_date, submission_date,
@@ -343,7 +343,7 @@ router.get('/:id/documents', ownAsset, async (req, res, next) => {
 });
 
 // ─── REGISTER SUPPORTING DOCUMENT ────────────────────────────────────────────
-router.post('/:id/documents', authorize('trade_group_owner','program_manager','intake_officer'), async (req, res, next) => {
+router.post('/:id/documents', authorize('program_manager'), async (req, res, next) => {
   try {
     const { doc_type, doc_subtype, file_name, file_size_bytes,
             content_type, submission_date, gcs_bucket, gcs_object_path } = req.body;
@@ -383,7 +383,7 @@ router.get('/:id/token', ownAsset, async (req, res, next) => {
 });
 
 // ─── ASSIGN TRADER BANK ───────────────────────────────────────────────────────
-router.post('/:id/bank-assignment', authorize('trade_group_owner','program_manager'), async (req, res, next) => {
+router.post('/:id/bank-assignment', authorize('program_manager'), async (req, res, next) => {
   try {
     const { bank_name, bank_jurisdiction, bank_swift_code,
             assignment_basis, notes } = req.body;

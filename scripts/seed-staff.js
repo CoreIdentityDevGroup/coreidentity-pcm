@@ -22,7 +22,7 @@
  *   STAFF_EMAIL, STAFF_NAME, STAFF_ROLE, STAFF_PASSWORD
  *
  * STAFF_ROLE must be one of the values pcm_staff_role_check allows:
- *   trade_group_owner, program_manager, intake_officer
+ *   administrator, program_manager, intake_officer
  *
  * Run: node scripts/seed-staff.js
  */
@@ -45,7 +45,7 @@ const pool = new Pool({
 });
 
 // Mirrors the pcm_staff_role_check constraint in the schema.
-const ALLOWED_ROLES = ['trade_group_owner', 'program_manager', 'intake_officer'];
+const ALLOWED_ROLES = ['administrator', 'program_manager', 'intake_officer'];
 
 async function main() {
   const email = process.env.STAFF_EMAIL;

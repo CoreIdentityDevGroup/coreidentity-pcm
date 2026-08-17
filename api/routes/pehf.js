@@ -45,7 +45,7 @@ router.get('/:id', async (req, res, next) => {
 });
 
 // ─── CREATE FUND ──────────────────────────────────────────────────────────────
-router.post('/', authorize('trade_group_owner','program_manager'), async (req, res, next) => {
+router.post('/', authorize('program_manager'), async (req, res, next) => {
   try {
     const {
       fund_name, fund_type, strategy, aum_usd, aum_as_of_date,
@@ -77,7 +77,7 @@ router.post('/', authorize('trade_group_owner','program_manager'), async (req, r
 });
 
 // ─── UPDATE FUND ──────────────────────────────────────────────────────────────
-router.patch('/:id', authorize('trade_group_owner','program_manager'), async (req, res, next) => {
+router.patch('/:id', authorize('program_manager'), async (req, res, next) => {
   try {
     const allowed = ['fund_name','strategy','aum_usd','aum_as_of_date','geography',
                      'jurisdiction','regulatory_status','deployment_appetite',
@@ -106,7 +106,7 @@ router.patch('/:id', authorize('trade_group_owner','program_manager'), async (re
 });
 
 // ─── ADD CONTACT ──────────────────────────────────────────────────────────────
-router.post('/:id/contacts', authorize('trade_group_owner','program_manager'), async (req, res, next) => {
+router.post('/:id/contacts', authorize('program_manager'), async (req, res, next) => {
   try {
     const { full_name, title, email, phone, is_primary, linkedin_url, notes } = req.body;
     if (!full_name) return res.status(400).json({ error: 'full_name is required' });
@@ -130,7 +130,7 @@ router.post('/:id/contacts', authorize('trade_group_owner','program_manager'), a
 });
 
 // ─── UPDATE CONTACT ───────────────────────────────────────────────────────────
-router.patch('/:id/contacts/:contact_id', authorize('trade_group_owner','program_manager'), async (req, res, next) => {
+router.patch('/:id/contacts/:contact_id', authorize('program_manager'), async (req, res, next) => {
   try {
     const allowed = ['full_name','title','email','phone','is_primary','linkedin_url','notes'];
     const updates = [];
@@ -155,7 +155,7 @@ router.patch('/:id/contacts/:contact_id', authorize('trade_group_owner','program
 });
 
 // ─── ADD TRADER BANK RELATIONSHIP ─────────────────────────────────────────────
-router.post('/:id/banks', authorize('trade_group_owner','program_manager'), async (req, res, next) => {
+router.post('/:id/banks', authorize('program_manager'), async (req, res, next) => {
   try {
     const {
       bank_name, bank_jurisdiction, swift_code, branch,
@@ -195,7 +195,7 @@ router.get('/:id/banks', async (req, res, next) => {
 });
 
 // ─── ADD DEAL LINK ────────────────────────────────────────────────────────────
-router.post('/:id/deals', authorize('trade_group_owner','program_manager'), async (req, res, next) => {
+router.post('/:id/deals', authorize('program_manager'), async (req, res, next) => {
   try {
     const {
       asset_id, client_id, pipeline_reference, link_type,
@@ -226,7 +226,7 @@ router.post('/:id/deals', authorize('trade_group_owner','program_manager'), asyn
 // data, this route is client-specific. Staff-only, matching this file's own
 // POST/PATCH tuple -- a 'client' role has no legitimate use for a cross-fund
 // view of deal links (which may include other clients' commitments).
-router.get('/:id/deals', authorize('trade_group_owner','program_manager'), async (req, res, next) => {
+router.get('/:id/deals', authorize('program_manager'), async (req, res, next) => {
   try {
     const { link_status } = req.query;
     let query = `SELECT * FROM pcm_deal_links WHERE fund_id = $1`;
@@ -241,7 +241,7 @@ router.get('/:id/deals', authorize('trade_group_owner','program_manager'), async
 });
 
 // ─── UPDATE DEAL LINK STATUS ──────────────────────────────────────────────────
-router.patch('/:id/deals/:link_id', authorize('trade_group_owner','program_manager'), async (req, res, next) => {
+router.patch('/:id/deals/:link_id', authorize('program_manager'), async (req, res, next) => {
   try {
     const { link_status, capital_committed_usd, notes } = req.body;
     const updates = [];

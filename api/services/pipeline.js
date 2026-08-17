@@ -2,20 +2,27 @@
 
 const db         = require('./db');
 const governance = require('./governance');
+const { normalizeRole, isAdministrator } = require('../middleware/authorize');
 
 // ─── PIPELINE STAGE DEFINITIONS ───────────────────────────────────────────────
+// gate_roles: explicit permission sets, not a >= hierarchy (2026-08-17
+// access-control redesign) -- replaces the old single gate_role + numeric
+// hierarchy lookup. Administrator is not listed per-row: it passes every
+// gate by definition (see checkRoleAuthority below), same convention as
+// authorize.js. 'system' stages (tokenization/completed) are unchanged --
+// automated, gated on a recorded system check result, not a human role.
 const STAGES = {
-  intake:           { order: 1, gate_role: 'intake_officer',    label: 'Intake and Document Receipt' },
-  kyc_verification: { order: 2, gate_role: 'intake_officer',    label: 'KYC / CIS / POF Verification' },
-  appraisal_review: { order: 3, gate_role: 'program_manager',   label: 'Appraisal / Valuation Review' },
-  bank_assignment:  { order: 4, gate_role: 'trade_group_owner', label: 'Trader Bank Assignment' },
-  collateralization:{ order: 5, gate_role: 'trade_group_owner', label: 'Collateralization' },
-  monetization:     { order: 6, gate_role: 'program_manager',   label: 'Monetization' },
-  securitization:   { order: 7, gate_role: 'program_manager',   label: 'Securitization' },
-  tokenization:     { order: 8, gate_role: 'system',            label: 'Tokenization' },
-  completed:        { order: 9, gate_role: 'system',            label: 'Completed' },
-  rejected:         { order: 0, gate_role: 'trade_group_owner', label: 'Rejected' },
-  on_hold:          { order: 0, gate_role: 'program_manager',   label: 'On Hold' }
+  intake:           { order: 1, gate_roles: ['intake_officer'],  label: 'Intake and Document Receipt' },
+  kyc_verification: { order: 2, gate_roles: ['intake_officer'],  label: 'KYC / CIS / POF Verification' },
+  appraisal_review: { order: 3, gate_roles: ['program_manager'], label: 'Appraisal / Valuation Review' },
+  bank_assignment:  { order: 4, gate_roles: [],                  label: 'Trader Bank Assignment' },   // Administrator only
+  collateralization:{ order: 5, gate_roles: [],                  label: 'Collateralization' },        // Administrator only
+  monetization:     { order: 6, gate_roles: ['program_manager'], label: 'Monetization' },
+  securitization:   { order: 7, gate_roles: ['program_manager'], label: 'Securitization' },
+  tokenization:     { order: 8, gate_roles: ['system'],          label: 'Tokenization' },
+  completed:        { order: 9, gate_roles: ['system'],          label: 'Completed' },
+  rejected:         { order: 0, gate_roles: [],                  label: 'Rejected' },                 // Administrator only
+  on_hold:          { order: 0, gate_roles: ['program_manager'], label: 'On Hold' }
 };
 
 // CLOSE-GAP-30: sequential-stage-order enforcement, previously absent
@@ -113,6 +120,26 @@ const GATE_REQUIREMENTS = {
     if (!ofacSatisfied) {
       errors.push(`OFAC screening not satisfied (status: ${ofacStatus || 'none'}) — requires an authoritative real-engine clear result, a confirmed dual-control override (engine flagged a match), or a confirmed out-of-band attestation (engine could not authoritatively screen)`);
     }
+
+    // Legal review, 2026-08-17 access-control redesign: counsel is
+    // internal to the platform owners but external to CoreG, has no
+    // portal account, and never performs the review inside this system --
+    // the platform only records that it happened (see
+    // pcm_legal_attestations / api/routes/clients.js's legal-attestation
+    // routes). Distinguishing "no attestation" from "entered but not yet
+    // countersigned" here, same as the OFAC branch above distinguishes
+    // its own sub-states, rather than collapsing both into one message.
+    const legal = await db.clients.query(
+      `SELECT status FROM pcm_legal_attestations
+       WHERE client_id = $1 ORDER BY entered_at DESC LIMIT 1`, [client_id]
+    );
+    const legalStatus = legal.rows[0]?.status;
+    if (legalStatus !== 'confirmed') {
+      errors.push(legalStatus === 'pending_countersign'
+        ? 'Legal attestation recorded but not yet countersigned by an Administrator'
+        : 'No legal-review attestation on file');
+    }
+
     return errors;
   },
 
@@ -288,7 +315,7 @@ function checkRoleAuthority(to_stage, user_role, systemCheck) {
   const stage = STAGES[to_stage];
   if (!stage) return { authorized: false, reason: `Unknown stage: ${to_stage}` };
 
-  if (stage.gate_role === 'system') {
+  if (stage.gate_roles.includes('system')) {
     if (!systemCheck || systemCheck.evaluated !== true) {
       return {
         authorized: false,
@@ -304,14 +331,18 @@ function checkRoleAuthority(to_stage, user_role, systemCheck) {
     return { authorized: true };
   }
 
-  const hierarchy = { trade_group_owner: 3, program_manager: 2, intake_officer: 1, system: 0 };
-  const required  = hierarchy[stage.gate_role] || 0;
-  const current   = hierarchy[user_role] || 0;
+  // Explicit permission set, not a >= hierarchy. Administrator passes
+  // every gate by definition (isAdministrator, alias-aware for
+  // pre-rename tokens); everyone else must appear in this stage's own
+  // gate_roles list -- no inheritance between Program Manager and Intake
+  // Officer.
+  const authorized = isAdministrator(user_role) || stage.gate_roles.includes(normalizeRole(user_role));
 
-  if (current < required) {
+  if (!authorized) {
+    const required = stage.gate_roles.length ? stage.gate_roles.join(' or ') : 'Administrator';
     return {
       authorized: false,
-      reason: `Stage '${to_stage}' requires role '${stage.gate_role}' or higher. Current role: '${user_role}'`
+      reason: `Stage '${to_stage}' requires role '${required}'. Current role: '${user_role}'`
     };
   }
   return { authorized: true };
@@ -375,7 +406,7 @@ async function advancePipeline({ asset_id, client_id, to_stage, user, notes }) {
   }
 
   let systemCheck;
-  if (stage.gate_role === 'system') {
+  if (stage.gate_roles.includes('system')) {
     try {
       const errors = await validateGate(to_stage, asset_id, client_id);
       systemCheck = { evaluated: true, passed: errors.length === 0, errors };
@@ -557,7 +588,7 @@ async function getPipelineStatus(asset_id, client_id) {
     pipeline_reference: asset.rows[0].pipeline_reference,
     current_stage,
     stage_label:  stage_info?.label,
-    gate_role:    stage_info?.gate_role,
+    gate_roles:   stage_info?.gate_roles,
     next_stage,
     next_gate_status,
     history:      history.rows,
@@ -567,4 +598,4 @@ async function getPipelineStatus(asset_id, client_id) {
   };
 }
 
-module.exports = { advancePipeline, getPipelineStatus, validateGate, STAGES, isValidTransition };
+module.exports = { advancePipeline, getPipelineStatus, validateGate, STAGES, isValidTransition, checkRoleAuthority };

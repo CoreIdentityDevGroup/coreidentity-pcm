@@ -31,7 +31,7 @@ const ALLOWED_TYPES = [
 // at all: any authenticated role, including 'client', could upload a file
 // tagged to an arbitrary client_id, forging evidence into another client's
 // KYC/POF/ID-document vault.
-router.post('/', authorize('trade_group_owner','program_manager','intake_officer'), upload.single('file'), async (req, res) => {
+router.post('/', authorize('administrator','program_manager','intake_officer'), upload.single('file'), async (req, res) => {
   const { doc_category, client_id, asset_id } = req.body;
   const file = req.file;
 

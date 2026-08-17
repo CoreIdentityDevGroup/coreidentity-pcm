@@ -209,7 +209,7 @@ router.post('/reset-password', async (req, res) => {
 // reset was initiated, not a password handed over). Same token/TTL/
 // single-use mechanism as self-service, distinguished only by
 // initiated_by being the admin's identity instead of null.
-router.post('/admin/reset-password', authenticate, authorize('trade_group_owner'), async (req, res) => {
+router.post('/admin/reset-password', authenticate, authorize('administrator'), async (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ error: 'email required' });
 

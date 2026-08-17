@@ -33,7 +33,7 @@ router.get('/:type', async (req, res, next) => {
 });
 
 // ─── UPDATE RULE CONTENT (admin) ──────────────────────────────────────────────
-router.put('/:type', authorize('trade_group_owner'), async (req, res, next) => {
+router.put('/:type', authorize('administrator'), async (req, res, next) => {
   try {
     if (!RULE_TYPES.includes(req.params.type)) {
       return res.status(400).json({ error: `Unknown rule type '${req.params.type}'`, allowed: RULE_TYPES });

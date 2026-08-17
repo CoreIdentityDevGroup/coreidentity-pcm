@@ -60,6 +60,7 @@ describe('Step 4d — real HTTP proof of gate enforcement', () => {
     await fx.addKycDocument(client_id);
     await fx.addPofRecord(client_id);
     await fx.confirmOfacAttestation(client_id);
+    await fx.confirmLegalAttestation(client_id);
 
     const res = await request(app)
       .post('/api/v1/pipeline/advance')
@@ -79,11 +80,12 @@ describe('Step 4d — real HTTP proof of gate enforcement', () => {
     await fx.addKycDocument(client_id);
     await fx.addPofRecord(client_id);
     await fx.confirmOfacAttestation(client_id);
+    await fx.confirmLegalAttestation(client_id);
 
-    // kyc_verification requires intake_officer or higher in the role
-    // hierarchy (trade_group_owner:3, program_manager:2,
-    // intake_officer:1) -- CUSTOMER-equivalent low-privilege role
-    // rejected here is deliberately below that.
+    // kyc_verification's gate_roles is ['intake_officer'] (explicit set,
+    // not a hierarchy -- 2026-08-17 redesign); Administrator passes every
+    // gate by definition. 'system' is in neither category and is
+    // deliberately rejected here.
     const res = await request(app)
       .post('/api/v1/pipeline/advance')
       .set('Authorization', `Bearer ${tokenFor('system')}`)
@@ -98,6 +100,7 @@ describe('Step 4d — real HTTP proof of gate enforcement', () => {
     await fx.addKycDocument(client_id);
     await fx.addPofRecord(client_id);
     await fx.confirmOfacAttestation(client_id);
+    await fx.confirmLegalAttestation(client_id);
 
     const toKyc = await request(app)
       .post('/api/v1/pipeline/advance')
@@ -112,6 +115,11 @@ describe('Step 4d — real HTTP proof of gate enforcement', () => {
     expect(toHold.status).toBe(200);
     expect(toHold.body.success).toBe(true);
 
+    // Deliberately still 'trade_group_owner', not 'administrator' -- this
+    // doubles as a regression test of the alias window (authorize.js's
+    // normalizeRole()): a token minted with the pre-rename role string
+    // must still pass an Administrator-level gate. See
+    // tests/access-control-redesign.test.js for the explicit alias tests.
     const resumed = await request(app)
       .post('/api/v1/pipeline/resume')
       .set('Authorization', `Bearer ${tokenFor('trade_group_owner')}`)

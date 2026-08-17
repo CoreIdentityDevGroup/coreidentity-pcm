@@ -14,7 +14,7 @@ const ownClient = requireOwnClientOrStaff(req => req.params.id);
 // Staff-only: a multi-client listing has no legitimate use for a client-role
 // token (their own record is available via GET /:id). Same staff-role tuple
 // already used for POST/PATCH on this resource, not a new boundary.
-router.get('/', authorize('trade_group_owner','program_manager','intake_officer'), async (req, res, next) => {
+router.get('/', authorize('intake_officer'), async (req, res, next) => {
   try {
     const { stage, assigned_to, country, limit = 50, offset = 0 } = req.query;
     let query = `SELECT * FROM pcm_clients WHERE deleted_at IS NULL`;
@@ -46,7 +46,7 @@ router.get('/:id', ownClient, async (req, res, next) => {
 });
 
 // ─── CREATE CLIENT ────────────────────────────────────────────────────────────
-router.post('/', authorize('trade_group_owner','program_manager','intake_officer'), async (req, res, next) => {
+router.post('/', authorize('intake_officer'), async (req, res, next) => {
   try {
     const {
       full_name, email, phone, country_of_origin, jurisdiction,
@@ -107,7 +107,7 @@ router.post('/', authorize('trade_group_owner','program_manager','intake_officer
 });
 
 // ─── UPDATE CLIENT ────────────────────────────────────────────────────────────
-router.patch('/:id', authorize('trade_group_owner','program_manager','intake_officer'), async (req, res, next) => {
+router.patch('/:id', authorize('intake_officer'), async (req, res, next) => {
   try {
     const allowed = ['full_name','email','phone','country_of_origin','jurisdiction',
                      'referral_source','referral_contact','notes',
@@ -148,7 +148,7 @@ router.patch('/:id', authorize('trade_group_owner','program_manager','intake_off
 // advancing a client's stage independent of an asset in the guarded
 // model. Route kept (not deleted) so a caller gets 410 Gone instead of a
 // 404 that could pass for a typo.
-router.post('/:id/advance', authorize('trade_group_owner','program_manager','intake_officer'), (req, res) => {
+router.post('/:id/advance', authorize('intake_officer'), (req, res) => {
   res.status(410).json({
     error:       'Gone',
     message:     'This endpoint no longer advances pipeline stage. It performed no role-hierarchy, gate, or Sentinel checks, and never accepted the asset_id the guarded path requires. Use POST /api/v1/pipeline/advance instead.',
@@ -184,7 +184,7 @@ router.get('/:id/kyc', ownClient, async (req, res, next) => {
 });
 
 // ─── REGISTER KYC DOCUMENT (metadata only — upload via signed URL) ────────────
-router.post('/:id/kyc', authorize('trade_group_owner','program_manager','intake_officer'), async (req, res, next) => {
+router.post('/:id/kyc', authorize('intake_officer'), async (req, res, next) => {
   try {
     const { doc_type, doc_subtype, file_name, file_size_bytes,
             content_type, submission_date, gcs_bucket, gcs_object_path } = req.body;
@@ -229,7 +229,7 @@ router.get('/:id/id-documents', ownClient, async (req, res, next) => {
 });
 
 // ─── REGISTER ID DOCUMENT (metadata only — upload via signed URL) ─────────────
-router.post('/:id/id-documents', authorize('trade_group_owner','program_manager','intake_officer'), async (req, res, next) => {
+router.post('/:id/id-documents', authorize('intake_officer'), async (req, res, next) => {
   try {
     const { doc_type, id_number, issuing_country, expiry_date,
             file_name, content_type, gcs_bucket, gcs_object_path } = req.body;
@@ -269,7 +269,7 @@ router.get('/:id/pof', ownClient, async (req, res, next) => {
 });
 
 // ─── REGISTER POF RECORD ──────────────────────────────────────────────────────
-router.post('/:id/pof', authorize('trade_group_owner','program_manager','intake_officer'), async (req, res, next) => {
+router.post('/:id/pof', authorize('intake_officer'), async (req, res, next) => {
   try {
     const { declared_amount, currency, issuing_bank, issuing_bank_swift,
             submission_date, gcs_bucket, gcs_object_path } = req.body;
@@ -313,7 +313,7 @@ router.post('/:id/pof', authorize('trade_group_owner','program_manager','intake_
 });
 
 // ─── VERIFY POF ───────────────────────────────────────────────────────────────
-router.patch('/:id/pof/:pof_id/verify', authorize('trade_group_owner','program_manager'), async (req, res, next) => {
+router.patch('/:id/pof/:pof_id/verify', authorize('program_manager'), async (req, res, next) => {
   try {
     const { verification_notes } = req.body;
     const result = await db.clients.query(
@@ -347,7 +347,7 @@ router.get('/:id/ofac', ownClient, async (req, res, next) => {
 // body, with no evidence it came from a real screen. Route kept (not
 // deleted) so a caller gets 410 Gone instead of a 404 that could pass for
 // a typo. See POST .../ofac/override for the real, dual-control path.
-router.post('/:id/ofac', authorize('trade_group_owner','program_manager','intake_officer'), (req, res) => {
+router.post('/:id/ofac', authorize('intake_officer'), (req, res) => {
   res.status(410).json({
     error:       'Gone',
     message:     'This endpoint no longer sets OFAC status from an unverified request body. Automated screening is recorded by the ofac-screening agent directly. For a manual/out-of-band screen, use the dual-control override flow.',
@@ -360,7 +360,7 @@ router.post('/:id/ofac', authorize('trade_group_owner','program_manager','intake
 // Does NOT set pcm_clients.ofac_status -- the KYC gate does not accept this
 // until a second, distinct principal confirms via the countersign endpoint
 // below. A single request naming two people is not dual control.
-router.post('/:id/ofac/override', authorize('trade_group_owner'), async (req, res, next) => {
+router.post('/:id/ofac/override', authorize('administrator'), async (req, res, next) => {
   try {
     // CLOSE-GAP-26: structured fields, not just free-text reason. "Two
     // people clicked confirm" is not an audit trail for a sanctions
@@ -396,7 +396,7 @@ router.post('/:id/ofac/override', authorize('trade_group_owner'), async (req, re
     res.status(201).json({
       result_id:  result.rows[0].result_id,
       status:     'PENDING_COUNTERSIGN',
-      message:    'Override initiated. A different trade_group_owner must countersign before this affects the KYC gate.',
+      message:    'Override initiated. A different Administrator must countersign before this affects the KYC gate.',
       initiated_by: initiatedBy
     });
   } catch (err) { next(err); }
@@ -409,7 +409,7 @@ router.post('/:id/ofac/override', authorize('trade_group_owner'), async (req, re
 // be overridden, so this uses its own provider/status/outcome vocabulary
 // rather than reusing MANUAL_OVERRIDE's, which would misrepresent the
 // audit trail as "every screen was an override."
-router.post('/:id/ofac/attest-out-of-band', authorize('trade_group_owner'), async (req, res, next) => {
+router.post('/:id/ofac/attest-out-of-band', authorize('administrator'), async (req, res, next) => {
   try {
     const { reason, screening_provider, screening_date, reference_number } = req.body;
     if (!reason || !reason.trim()) {
@@ -442,7 +442,7 @@ router.post('/:id/ofac/attest-out-of-band', authorize('trade_group_owner'), asyn
     res.status(201).json({
       result_id:  result.rows[0].result_id,
       status:     'PENDING_ATTESTATION',
-      message:    'Attestation initiated. A different trade_group_owner must confirm before this affects the KYC gate.',
+      message:    'Attestation initiated. A different Administrator must confirm before this affects the KYC gate.',
       initiated_by: initiatedBy
     });
   } catch (err) { next(err); }
@@ -451,7 +451,7 @@ router.post('/:id/ofac/attest-out-of-band', authorize('trade_group_owner'), asyn
 // ─── CONFIRM OFAC OUT-OF-BAND ATTESTATION (CLOSE-GAP-26, step 2 of 2) ────────
 // Only after this succeeds does pcm_clients.ofac_status become
 // 'attested_out_of_band'.
-router.patch('/:id/ofac/attest-out-of-band/:result_id/confirm', authorize('trade_group_owner'), async (req, res, next) => {
+router.patch('/:id/ofac/attest-out-of-band/:result_id/confirm', authorize('administrator'), async (req, res, next) => {
   try {
     const { reason } = req.body;
     if (!reason || !reason.trim()) {
@@ -511,7 +511,7 @@ router.patch('/:id/ofac/attest-out-of-band/:result_id/confirm', authorize('trade
 // Only after this succeeds does pcm_clients.ofac_status become
 // 'manual_review' -- never 'clear'. Distinguishable from a real screen in
 // every downstream query, permanently.
-router.patch('/:id/ofac/override/:result_id/countersign', authorize('trade_group_owner'), async (req, res, next) => {
+router.patch('/:id/ofac/override/:result_id/countersign', authorize('administrator'), async (req, res, next) => {
   try {
     const { reason } = req.body;
     if (!reason || !reason.trim()) {
@@ -566,8 +566,100 @@ router.patch('/:id/ofac/override/:result_id/countersign', authorize('trade_group
   } catch (err) { next(err); }
 });
 
+// ─── RECORD LEGAL-REVIEW ATTESTATION (step 1 of 2) ───────────────────────────
+// 2026-08-17 access-control redesign. Counsel is internal to the platform
+// owners but external to CoreG -- no portal account, never performs the
+// review inside this system. The platform only records that it happened:
+// who reviewed, when, and a reference -- not a boolean. Modeled directly
+// on the OFAC out-of-band attestation two-step above, same reasoning:
+// separation of duties requires a principal DIFFERENT from whoever entered
+// this to countersign before it satisfies the kyc_verification gate
+// (GATE_REQUIREMENTS.kyc_verification, api/services/pipeline.js).
+router.post('/:id/legal-attestation', authorize('intake_officer'), async (req, res, next) => {
+  try {
+    const { counsel_name, review_date, reference } = req.body;
+    if (!counsel_name || !counsel_name.trim()) {
+      return res.status(400).json({ error: 'counsel_name is required — name the reviewing counsel' });
+    }
+    if (!review_date || !review_date.trim()) {
+      return res.status(400).json({ error: 'review_date is required — when counsel actually reviewed' });
+    }
+    if (!reference || !reference.trim()) {
+      return res.status(400).json({ error: 'reference is required — matter number, memo reference, or a reason' });
+    }
+
+    const client = await db.clients.query(
+      `SELECT client_id FROM pcm_clients WHERE client_id = $1 AND deleted_at IS NULL`,
+      [req.params.id]
+    );
+    if (!client.rows.length) return res.status(404).json({ error: 'Client not found' });
+
+    const enteredBy = req.user.sub || req.user.email;
+    const result = await db.clients.query(
+      `INSERT INTO pcm_legal_attestations
+        (client_id, counsel_name, review_date, reference, entered_by)
+       VALUES ($1,$2,$3,$4,$5)
+       RETURNING *`,
+      [req.params.id, counsel_name, review_date, reference, enteredBy]
+    );
+
+    res.status(201).json({
+      attestation_id: result.rows[0].attestation_id,
+      status:          'pending_countersign',
+      message:         'Legal attestation recorded. A different principal (Administrator) must countersign before this affects the KYC gate.',
+      entered_by:      enteredBy
+    });
+  } catch (err) { next(err); }
+});
+
+// ─── COUNTERSIGN LEGAL-REVIEW ATTESTATION (step 2 of 2) ──────────────────────
+// Administrator-only, per this session's separation-of-duties decision:
+// Intake Officer both registers compliance evidence (KYC/POF) and would be
+// the one entering this record, so countersigning it too would put the
+// same principal on both ends of the one check meant to catch a
+// fabricated or rubber-stamped entry. Only after this succeeds does the
+// attestation satisfy GATE_REQUIREMENTS.kyc_verification.
+router.patch('/:id/legal-attestation/:attestation_id/countersign', authorize('administrator'), async (req, res, next) => {
+  try {
+    const existing = await db.clients.query(
+      `SELECT * FROM pcm_legal_attestations WHERE attestation_id = $1 AND client_id = $2`,
+      [req.params.attestation_id, req.params.id]
+    );
+    if (!existing.rows.length) return res.status(404).json({ error: 'Attestation not found' });
+
+    const attestation = existing.rows[0];
+    if (attestation.status !== 'pending_countersign') {
+      return res.status(409).json({ error: `Attestation is not pending countersign (current state: ${attestation.status})` });
+    }
+
+    const countersignedBy = req.user.sub || req.user.email;
+    if (attestation.entered_by === countersignedBy) {
+      return res.status(403).json({ error: 'Cannot countersign your own attestation entry — dual control requires a different principal' });
+    }
+
+    const updated = await db.clients.query(
+      `UPDATE pcm_legal_attestations
+       SET status = 'confirmed', countersigned_by = $1, countersigned_at = NOW()
+       WHERE attestation_id = $2
+       RETURNING *`,
+      [countersignedBy, req.params.attestation_id]
+    );
+
+    const governance = require('../services/governance');
+    await governance.salLog({
+      agent_id: countersignedBy,
+      action:   'LEGAL_ATTESTATION_COUNTERSIGNED',
+      resource: `pcm:client:${req.params.id}`,
+      decision: 'ALLOW',
+      context:  { entered_by: attestation.entered_by, countersigned_by: countersignedBy, attestation_id: req.params.attestation_id }
+    }).catch(() => {});
+
+    res.json(updated.rows[0]);
+  } catch (err) { next(err); }
+});
+
 // ─── SOFT DELETE CLIENT ───────────────────────────────────────────────────────
-router.delete('/:id', authorize('trade_group_owner'), async (req, res, next) => {
+router.delete('/:id', authorize('administrator'), async (req, res, next) => {
   try {
     const result = await db.clients.query(
       `UPDATE pcm_clients SET deleted_at = NOW()

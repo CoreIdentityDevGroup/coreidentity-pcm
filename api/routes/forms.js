@@ -71,7 +71,7 @@ router.get('/:id', ownAgreement, async (req, res, next) => {
 });
 
 // ─── CREATE AGREEMENT ─────────────────────────────────────────────────────────
-router.post('/', authorize('trade_group_owner','program_manager','intake_officer'), async (req, res, next) => {
+router.post('/', authorize('program_manager'), async (req, res, next) => {
   try {
     const {
       asset_id, client_id, agreement_type, jurisdiction_type,
@@ -142,7 +142,7 @@ router.post('/', authorize('trade_group_owner','program_manager','intake_officer
 // manual action.
 const SIGNATURE_COMPUTED_STATUSES = ['fully_executed', 'partially_signed'];
 
-router.patch('/:id/status', authorize('trade_group_owner','program_manager'), async (req, res, next) => {
+router.patch('/:id/status', authorize('program_manager'), async (req, res, next) => {
   try {
     const { status } = req.body;
     if (!status) return res.status(400).json({ error: 'status is required' });
@@ -167,7 +167,7 @@ router.patch('/:id/status', authorize('trade_group_owner','program_manager'), as
 });
 
 // ─── ADD NEW VERSION ──────────────────────────────────────────────────────────
-router.post('/:id/versions', authorize('trade_group_owner','program_manager'), async (req, res, next) => {
+router.post('/:id/versions', authorize('program_manager'), async (req, res, next) => {
   try {
     const { gcs_bucket, gcs_object_path, file_name, change_reason, change_note } = req.body;
 
@@ -215,7 +215,7 @@ router.get('/:id/versions', ownAgreement, async (req, res, next) => {
 });
 
 // ─── RECORD PARTY SIGNATURE ───────────────────────────────────────────────────
-router.patch('/:id/parties/:party_id/sign', authorize('trade_group_owner','program_manager'), async (req, res, next) => {
+router.patch('/:id/parties/:party_id/sign', authorize('program_manager'), async (req, res, next) => {
   try {
     const { signature_method, signature_reference } = req.body;
 
@@ -277,7 +277,7 @@ router.get('/:id/monitoring', ownAgreement, async (req, res, next) => {
 // 'client', could fabricate a monitoring event (arbitrary severity/message/
 // agent_id) against any agreement/asset/client_id, not just their own. Staff
 // tuple matches the other POST-write routes in this file (creation, resolve).
-router.post('/:id/monitoring', authorize('trade_group_owner','program_manager','intake_officer'), async (req, res, next) => {
+router.post('/:id/monitoring', authorize('program_manager'), async (req, res, next) => {
   try {
     const { asset_id, client_id, pipeline_reference, event_type,
             severity, message, agent_id } = req.body;
@@ -304,7 +304,7 @@ router.post('/:id/monitoring', authorize('trade_group_owner','program_manager','
 });
 
 // ─── RESOLVE MONITORING EVENT ─────────────────────────────────────────────────
-router.patch('/:id/monitoring/:log_id/resolve', authorize('trade_group_owner','program_manager'), async (req, res, next) => {
+router.patch('/:id/monitoring/:log_id/resolve', authorize('program_manager'), async (req, res, next) => {
   try {
     const { resolution_note } = req.body;
     const result = await db.forms.query(
@@ -326,7 +326,7 @@ router.patch('/:id/monitoring/:log_id/resolve', authorize('trade_group_owner','p
 // as pipeline/board. No per-agreement scoping is possible here since it's
 // inherently cross-client by design; a 'client' role has no legitimate use
 // for an org-wide alerts feed.
-router.get('/monitoring/alerts', authorize('trade_group_owner','program_manager','intake_officer'), async (req, res, next) => {
+router.get('/monitoring/alerts', authorize('program_manager'), async (req, res, next) => {
   try {
     const result = await db.forms.query(
       `SELECT m.*, a.agreement_type, a.pipeline_reference, a.status as agreement_status

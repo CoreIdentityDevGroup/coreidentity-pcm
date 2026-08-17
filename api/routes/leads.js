@@ -13,7 +13,7 @@ const router  = express.Router();
 // are unchanged -- intentionally public intake routes.
 
 // GET /api/v1/leads
-router.get('/', authorize('trade_group_owner','program_manager','intake_officer'), async (req, res) => {
+router.get('/', authorize('administrator','program_manager','intake_officer'), async (req, res) => {
   const { status, limit = 50 } = req.query;
   try {
     const query = status
@@ -35,7 +35,7 @@ router.get('/', authorize('trade_group_owner','program_manager','intake_officer'
 });
 
 // POST /api/v1/leads
-router.post('/', authorize('trade_group_owner','program_manager','intake_officer'), async (req, res) => {
+router.post('/', authorize('administrator','program_manager','intake_officer'), async (req, res) => {
   const { client_name, contact_info, service_type,
           referral_type, referrer_id, notes } = req.body;
   if (!client_name)
@@ -58,7 +58,7 @@ router.post('/', authorize('trade_group_owner','program_manager','intake_officer
 });
 
 // PATCH /api/v1/leads/:id
-router.patch('/:id', authorize('trade_group_owner','program_manager','intake_officer'), async (req, res) => {
+router.patch('/:id', authorize('administrator','program_manager','intake_officer'), async (req, res) => {
   const { status, notes } = req.body;
   try {
     const result = await db.clients.query(

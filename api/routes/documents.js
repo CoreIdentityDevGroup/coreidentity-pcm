@@ -6,7 +6,7 @@ const { authorize } = require('../middleware/authorize');
 const router   = express.Router();
 
 // ─── CREATE DOCUMENT (with versioning, atomic) ────────────────────────────────
-router.post('/', authorize('trade_group_owner','program_manager','intake_officer'), async (req, res, next) => {
+router.post('/', authorize('administrator','program_manager','intake_officer'), async (req, res, next) => {
   const {
     client_id, transaction_id, document_type, file_name,
     file_size_bytes, mime_type, storage_path
@@ -89,7 +89,7 @@ router.get('/', async (req, res, next) => {
 });
 
 // ─── SOFT DELETE DOCUMENT ─────────────────────────────────────────────────────
-router.delete('/:id', authorize('trade_group_owner','program_manager','intake_officer'), async (req, res, next) => {
+router.delete('/:id', authorize('administrator','program_manager','intake_officer'), async (req, res, next) => {
   try {
     const result = await db.clients.query(
       `UPDATE pcm_documents SET active = false

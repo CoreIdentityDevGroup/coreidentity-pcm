@@ -75,7 +75,7 @@ router.get('/pipeline-stages', async (req, res, next) => {
 });
 
 // ─── CREATE REFERENCE ITEM (admin) ────────────────────────────────────────────
-router.post('/:type', authorize('trade_group_owner'), async (req, res, next) => {
+router.post('/:type', authorize('administrator'), async (req, res, next) => {
   try {
     const meta = resolveType(req, res);
     if (!meta) return;
@@ -101,7 +101,7 @@ router.post('/:type', authorize('trade_group_owner'), async (req, res, next) => 
 });
 
 // ─── UPDATE REFERENCE ITEM (admin) ────────────────────────────────────────────
-router.put('/:type/:id', authorize('trade_group_owner'), async (req, res, next) => {
+router.put('/:type/:id', authorize('administrator'), async (req, res, next) => {
   try {
     const meta = resolveType(req, res);
     if (!meta) return;
@@ -131,7 +131,7 @@ router.put('/:type/:id', authorize('trade_group_owner'), async (req, res, next) 
 });
 
 // ─── SOFT DELETE REFERENCE ITEM (admin) ───────────────────────────────────────
-router.delete('/:type/:id', authorize('trade_group_owner'), async (req, res, next) => {
+router.delete('/:type/:id', authorize('administrator'), async (req, res, next) => {
   try {
     const meta = resolveType(req, res);
     if (!meta) return;

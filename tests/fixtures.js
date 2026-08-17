@@ -46,12 +46,14 @@ async function addKycDocument(client_id) {
 }
 
 async function addPofRecord(client_id) {
-  await db.clients.query(
+  const result = await db.clients.query(
     `INSERT INTO pcm_pof_records
        (client_id, declared_amount, issuing_bank, gcs_bucket, gcs_object_path, submission_date)
-     VALUES ($1, 5000000, 'Test Bank', 'test-bucket', $2, CURRENT_DATE)`,
+     VALUES ($1, 5000000, 'Test Bank', 'test-bucket', $2, CURRENT_DATE)
+     RETURNING pof_id`,
     [client_id, `pof/${client_id}/${Date.now()}.pdf`]
   );
+  return result.rows[0].pof_id;
 }
 
 // Replicates exactly what POST .../ofac/attest-out-of-band/:id/confirm
@@ -72,6 +74,22 @@ async function confirmOfacAttestation(client_id) {
     `UPDATE pcm_clients SET ofac_status = 'attested_out_of_band', ofac_provider = 'OUT_OF_BAND_ATTESTATION', ofac_reference_id = $1
      WHERE client_id = $2`,
     [result.rows[0].result_id, client_id]
+  );
+}
+
+// Replicates exactly what POST .../legal-attestation + PATCH
+// .../legal-attestation/:id/countersign produces (2026-08-17
+// access-control redesign) -- the only path that satisfies the
+// kyc_verification gate's legal-review check. Writing the fixture
+// directly rather than calling the API mirrors the DB state a real
+// confirmed attestation leaves behind, same convention as
+// confirmOfacAttestation above.
+async function confirmLegalAttestation(client_id) {
+  await db.clients.query(
+    `INSERT INTO pcm_legal_attestations
+       (client_id, counsel_name, review_date, reference, entered_by, status, countersigned_by, countersigned_at)
+     VALUES ($1, 'Fixture Counsel', CURRENT_DATE, 'fixture-reference', 'fixture-principal-1', 'confirmed', 'fixture-principal-2', NOW())`,
+    [client_id]
   );
 }
 
@@ -159,6 +177,6 @@ async function createStaff(overrides = {}) {
 
 module.exports = {
   createClient, createAsset, addKycDocument, addPofRecord, confirmOfacAttestation,
-  addValuation, addAssetDocument, setInstrumentIntegrityVerified, setBankAssignment,
-  addExecutedAgreement, mintClassificationToken, createStaff
+  confirmLegalAttestation, addValuation, addAssetDocument, setInstrumentIntegrityVerified,
+  setBankAssignment, addExecutedAgreement, mintClassificationToken, createStaff
 };

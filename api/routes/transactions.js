@@ -21,7 +21,7 @@ const WRITABLE_FIELDS = [
 ];
 
 // ─── CREATE TRANSACTION (+ auto-populate 8 pipeline stages, atomic) ───────────
-router.post('/', authorize('trade_group_owner','program_manager','intake_officer'), async (req, res, next) => {
+router.post('/', authorize('program_manager'), async (req, res, next) => {
   const { client_id, transaction_type } = req.body;
   if (!client_id || !transaction_type) {
     return res.status(400).json({ error: 'client_id and transaction_type are required' });
@@ -123,7 +123,7 @@ router.get('/:id', requireOwnClientOrStaff(async req => {
 });
 
 // ─── UPDATE TRANSACTION ───────────────────────────────────────────────────────
-router.put('/:id', authorize('trade_group_owner','program_manager','intake_officer'), async (req, res, next) => {
+router.put('/:id', authorize('program_manager'), async (req, res, next) => {
   try {
     const updates = [];
     const params  = [];

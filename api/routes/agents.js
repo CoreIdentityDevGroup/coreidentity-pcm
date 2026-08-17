@@ -21,7 +21,7 @@ const GATE_BOUND_AGENTS = {
 
 // POST /api/v1/agents/run
 // Body: { agent_name, context }
-router.post('/run', authorize('trade_group_owner'), async (req, res) => {
+router.post('/run', authorize('administrator'), async (req, res) => {
   const { agent_name, context } = req.body;
   if (!agent_name) return res.status(400).json({ error: 'agent_name required' });
 
@@ -53,7 +53,7 @@ router.post('/run', authorize('trade_group_owner'), async (req, res) => {
 // POST /api/v1/agents/monitoring
 // Runs contract + transaction monitoring cycle
 // CLOSE-GAP-20: previously had no authorize() at all.
-router.post('/monitoring', authorize('trade_group_owner'), async (req, res) => {
+router.post('/monitoring', authorize('administrator'), async (req, res) => {
   try {
     const results = await runMonitoringCycle();
     res.json({ status: 'complete', results });

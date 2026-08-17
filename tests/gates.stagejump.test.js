@@ -16,6 +16,11 @@
 // Updated to assert the corrected behavior once the fix landed -- a test
 // that keeps asserting a known bug after the bug is fixed is worse than
 // no test.
+//
+// role: 'trade_group_owner' below is deliberately not renamed to
+// 'administrator' -- doubles as an alias-window regression test
+// (2026-08-17 access-control redesign, authorize.js's normalizeRole()).
+// See tests/access-control-redesign.test.js for the explicit alias tests.
 'use strict';
 
 jest.mock('../api/services/governance', () => ({
@@ -58,6 +63,7 @@ test('correctly sequenced single-step advance still succeeds (regression guard: 
   await fx.addKycDocument(client_id);
   await fx.addPofRecord(client_id);
   await fx.confirmOfacAttestation(client_id);
+  await fx.confirmLegalAttestation(client_id);
 
   const result = await advancePipeline({
     asset_id, client_id, to_stage: 'kyc_verification',
@@ -87,6 +93,7 @@ test('on_hold can only resume to the exact stage it was held from, reconstructed
   await fx.addKycDocument(client_id);
   await fx.addPofRecord(client_id);
   await fx.confirmOfacAttestation(client_id);
+  await fx.confirmLegalAttestation(client_id);
 
   // Advance to kyc_verification for real, then hold.
   const toKyc = await advancePipeline({ asset_id, client_id, to_stage: 'kyc_verification', user: { sub: 'test-fixture', role: 'trade_group_owner' } });

@@ -27,7 +27,7 @@ const TERMINAL_STATUSES = ['completed', 'skipped', 'not_applicable'];
 //   3. The client rules-acknowledgment gate (transactions.js's
 //      POST /:id/acknowledge-rules) actually blocks stage completion now,
 //      instead of being a self-attested field nothing ever reads.
-router.put('/:txId/stages/:stageNumber', authorize('trade_group_owner','program_manager','intake_officer'), async (req, res, next) => {
+router.put('/:txId/stages/:stageNumber', authorize('program_manager'), async (req, res, next) => {
   try {
     const stageNumber = parseInt(req.params.stageNumber, 10);
     if (!Number.isInteger(stageNumber) || stageNumber < 1 || stageNumber > 8) {

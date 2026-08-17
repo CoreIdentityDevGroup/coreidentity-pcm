@@ -1,7 +1,7 @@
 'use strict';
 
 // Client-role tokens may only access resources bound to their own client_id.
-// Staff roles (trade_group_owner, program_manager, intake_officer) keep their
+// Staff roles (administrator, program_manager, intake_officer) keep their
 // existing, unrestricted scope over client-linked resources -- this only adds
 // a floor under the 'client' role. Mirrors the ownership check already
 // established in transactions.js's acknowledge-rules route (fetch the

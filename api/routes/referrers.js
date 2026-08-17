@@ -10,7 +10,7 @@ const router  = express.Router();
 // Staff-only, matching the tuple used throughout the rest of this codebase.
 
 // GET /api/v1/referrers
-router.get('/', authorize('trade_group_owner','program_manager','intake_officer'), async (req, res) => {
+router.get('/', authorize('administrator','program_manager','intake_officer'), async (req, res) => {
   const { type } = req.query;
   try {
     const query = type
@@ -25,7 +25,7 @@ router.get('/', authorize('trade_group_owner','program_manager','intake_officer'
 });
 
 // POST /api/v1/referrers
-router.post('/', authorize('trade_group_owner','program_manager','intake_officer'), async (req, res) => {
+router.post('/', authorize('administrator','program_manager','intake_officer'), async (req, res) => {
   const { referral_type, contact_name, company, email, phone, notes } = req.body;
   if (!referral_type || !contact_name)
     return res.status(400).json({ error: 'referral_type and contact_name required' });
@@ -44,7 +44,7 @@ router.post('/', authorize('trade_group_owner','program_manager','intake_officer
 });
 
 // PATCH /api/v1/referrers/:id
-router.patch('/:id', authorize('trade_group_owner','program_manager','intake_officer'), async (req, res) => {
+router.patch('/:id', authorize('administrator','program_manager','intake_officer'), async (req, res) => {
   const { contact_name, company, email, phone, notes, active } = req.body;
   try {
     const result = await db.clients.query(
