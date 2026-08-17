@@ -140,8 +140,25 @@ async function mintClassificationToken(asset_id, client_id) {
   );
 }
 
+async function createStaff(overrides = {}) {
+  const email = overrides.email || `test-staff-${Date.now()}-${Math.floor(Math.random() * 1e6)}@example.test`;
+  const result = await db.clients.query(
+    `INSERT INTO pcm_staff (email, name, role, password_hash, active)
+     VALUES ($1, $2, $3, crypt($4, gen_salt('bf', 4)), $5)
+     RETURNING staff_id, email`,
+    [
+      email,
+      overrides.name || 'Test Staff',
+      overrides.role || 'intake_officer',
+      overrides.password || 'original-password-123',
+      overrides.active !== undefined ? overrides.active : true
+    ]
+  );
+  return result.rows[0];
+}
+
 module.exports = {
   createClient, createAsset, addKycDocument, addPofRecord, confirmOfacAttestation,
   addValuation, addAssetDocument, setInstrumentIntegrityVerified, setBankAssignment,
-  addExecutedAgreement, mintClassificationToken
+  addExecutedAgreement, mintClassificationToken, createStaff
 };
