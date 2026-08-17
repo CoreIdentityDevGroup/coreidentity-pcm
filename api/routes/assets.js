@@ -454,7 +454,7 @@ router.get('/:id/bank-assignments', ownAsset, async (req, res, next) => {
 // ownership taking effect.
 router.post('/:id/legal-attestation', authorize('intake_officer', 'program_manager'), async (req, res, next) => {
   try {
-    const { counsel_name, review_date, reference } = req.body;
+    const { counsel_name, review_date, reference, outcome } = req.body;
     if (!counsel_name || !counsel_name.trim()) {
       return res.status(400).json({ error: 'counsel_name is required — name the reviewing counsel' });
     }
@@ -464,6 +464,12 @@ router.post('/:id/legal-attestation', authorize('intake_officer', 'program_manag
     if (!reference || !reference.trim()) {
       return res.status(400).json({ error: 'reference is required — matter number, memo reference, or a reason' });
     }
+    // Binary, no conditions -- legal returns approve or deny, nothing
+    // else (2026-08-17 correction). No default: a regulatory decision
+    // must be stated explicitly, never inferred.
+    if (outcome !== 'approved' && outcome !== 'denied') {
+      return res.status(400).json({ error: "outcome is required and must be 'approved' or 'denied'" });
+    }
 
     const asset = await db.assets.query(
       `SELECT asset_id, client_id FROM pcm_assets WHERE asset_id = $1 AND deleted_at IS NULL`,
@@ -471,6 +477,24 @@ router.post('/:id/legal-attestation', authorize('intake_officer', 'program_manag
     );
     if (!asset.rows.length) return res.status(404).json({ error: 'Asset not found' });
     const { client_id } = asset.rows[0];
+
+    // No-supersede rule, general (2026-08-17 correction): once ANY
+    // attestation on this asset reaches 'confirmed' -- approved or
+    // denied -- reject further entries outright. A denied attestation
+    // must stay attached to the rejected asset as the record of why, not
+    // be overwritable; an already-approved asset shouldn't get a second
+    // attestation either. One rule, not a denial-specific special case.
+    const existingConfirmed = await db.clients.query(
+      `SELECT attestation_id, outcome FROM pcm_legal_attestations
+       WHERE asset_id = $1 AND status = 'confirmed' LIMIT 1`,
+      [req.params.id]
+    );
+    if (existingConfirmed.rows.length) {
+      return res.status(409).json({
+        error: `This asset already has a confirmed legal attestation (outcome: ${existingConfirmed.rows[0].outcome}). A corrected package is a new package, not a resubmission.`,
+        attestation_id: existingConfirmed.rows[0].attestation_id
+      });
+    }
 
     // Administrator can enter too (superset rule, confirmed explicitly) --
     // assigned_role/assigned_handler_role allow 'administrator' as a real
@@ -485,10 +509,10 @@ router.post('/:id/legal-attestation', authorize('intake_officer', 'program_manag
 
     const result = await db.clients.query(
       `INSERT INTO pcm_legal_attestations
-        (client_id, asset_id, counsel_name, review_date, reference, entered_by, assigned_role, assigned_staff_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+        (client_id, asset_id, counsel_name, review_date, reference, outcome, entered_by, assigned_role, assigned_staff_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
        RETURNING *`,
-      [client_id, req.params.id, counsel_name, review_date, reference, enteredBy, submitterRole, staffId]
+      [client_id, req.params.id, counsel_name, review_date, reference, outcome, enteredBy, submitterRole, staffId]
     );
 
     await db.assets.query(
@@ -499,6 +523,7 @@ router.post('/:id/legal-attestation', authorize('intake_officer', 'program_manag
     res.status(201).json({
       attestation_id: result.rows[0].attestation_id,
       status:          'pending_countersign',
+      outcome,
       assigned_role:   submitterRole,
       message:         'Legal attestation recorded and handler assigned. A different principal (Administrator) must countersign before this affects the KYC gate.',
       entered_by:      enteredBy
@@ -513,7 +538,22 @@ router.post('/:id/legal-attestation', authorize('intake_officer', 'program_manag
 // countersign is the ONLY independent check that legal actually made
 // this call -- there is no second person on the entry side the way
 // KYC-registration/OFAC-screening naturally has one. Only after this
-// succeeds does the attestation satisfy GATE_REQUIREMENTS.kyc_verification.
+// succeeds does an APPROVED attestation satisfy
+// GATE_REQUIREMENTS.kyc_verification.
+//
+// Denial handling (2026-08-17 correction): a denial gets the identical
+// dual-control treatment as an approval -- nothing about "this package
+// is dead" is final on an unconfirmed single-principal claim, matching
+// the approval path exactly rather than treating denial as a lesser
+// case. Only once COUNTERSIGNED does a denied outcome automatically move
+// the asset to 'rejected' -- reusing advancePipeline() itself (not a raw
+// UPDATE) so the transition gets the same validity check, audit trail
+// row, and Sentinel gate every other stage change gets. 'rejected' is
+// Administrator-only in gate_roles, and this route already required an
+// Administrator to reach this point, so the countersigning
+// Administrator's own req.user is the correct actor for the transition
+// -- there's no second authorization decision being made here, just the
+// consequence of the one already made.
 router.patch('/:id/legal-attestation/:attestation_id/countersign', authorize('administrator'), async (req, res, next) => {
   try {
     const existing = await db.clients.query(
@@ -546,10 +586,33 @@ router.patch('/:id/legal-attestation/:attestation_id/countersign', authorize('ad
       action:   'LEGAL_ATTESTATION_COUNTERSIGNED',
       resource: `pcm:asset:${req.params.id}`,
       decision: 'ALLOW',
-      context:  { entered_by: attestation.entered_by, countersigned_by: countersignedBy, attestation_id: req.params.attestation_id, assigned_role: attestation.assigned_role, assigned_staff_id: attestation.assigned_staff_id }
+      context:  { entered_by: attestation.entered_by, countersigned_by: countersignedBy, attestation_id: req.params.attestation_id, assigned_role: attestation.assigned_role, assigned_staff_id: attestation.assigned_staff_id, outcome: attestation.outcome }
     }).catch(() => {});
 
-    res.json(updated.rows[0]);
+    let rejection = null;
+    if (attestation.outcome === 'denied') {
+      const { advancePipeline } = require('../services/pipeline');
+      rejection = await advancePipeline({
+        asset_id: req.params.id,
+        client_id: attestation.client_id,
+        to_stage: 'rejected',
+        user: req.user,
+        notes: `Automatic: legal review denied (attestation ${attestation.attestation_id}, countersigned by ${countersignedBy})`
+      });
+      if (!rejection.success) {
+        // Fail loudly, not silently -- a denial that couldn't actually
+        // move the asset to rejected must not read to the caller as if
+        // it succeeded cleanly. The attestation itself IS confirmed at
+        // this point (that write already committed); this surfaces the
+        // secondary failure without pretending it didn't happen.
+        console.error(JSON.stringify({
+          level: 'error', message: 'Denial countersigned but automatic rejection failed',
+          attestation_id: attestation.attestation_id, asset_id: req.params.id, error: rejection.error
+        }));
+      }
+    }
+
+    res.json({ ...updated.rows[0], auto_rejected: attestation.outcome === 'denied', rejection_result: rejection });
   } catch (err) { next(err); }
 });
 

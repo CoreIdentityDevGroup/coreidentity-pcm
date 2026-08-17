@@ -91,13 +91,16 @@ async function confirmOfacAttestation(client_id) {
 // 'fixture-principal-2' would violate the constraint.
 async function confirmLegalAttestation(client_id, asset_id, overrides = {}) {
   const assignedStaffId = overrides.assigned_staff_id || (await createStaff({ role: 'intake_officer' })).staff_id;
+  // outcome required NOT NULL since db/migrations/0015 -- defaults to
+  // 'approved' since every existing caller of this fixture wants "gate
+  // satisfied", not a denial.
   await db.clients.query(
     `INSERT INTO pcm_legal_attestations
-       (client_id, asset_id, counsel_name, review_date, reference, entered_by, status,
+       (client_id, asset_id, counsel_name, review_date, reference, outcome, entered_by, status,
         countersigned_by, countersigned_at, assigned_role, assigned_staff_id)
-     VALUES ($1, $2, 'Fixture Counsel', CURRENT_DATE, 'fixture-reference', 'fixture-principal-1', 'confirmed',
+     VALUES ($1, $2, 'Fixture Counsel', CURRENT_DATE, 'fixture-reference', $5, 'fixture-principal-1', 'confirmed',
              'fixture-principal-2', NOW(), $3, $4)`,
-    [client_id, asset_id, overrides.assigned_role || 'intake_officer', assignedStaffId]
+    [client_id, asset_id, overrides.assigned_role || 'intake_officer', assignedStaffId, overrides.outcome || 'approved']
   );
 }
 

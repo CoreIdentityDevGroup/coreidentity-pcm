@@ -134,15 +134,28 @@ const GATE_REQUIREMENTS = {
     // "no attestation" from "entered but not yet countersigned" here, same
     // as the OFAC branch above distinguishes its own sub-states, rather
     // than collapsing both into one message.
+    // outcome checked alongside status (2026-08-17 correction: legal
+    // returns a binary approve/deny, not just "reviewed"). A confirmed
+    // DENIAL must not satisfy this gate -- in normal operation the
+    // countersign route's automatic rejection already moves the asset to
+    // 'rejected' before anyone could reach this check again (isValidTransition
+    // blocks all forward movement out of 'rejected' unconditionally), but
+    // this still fails closed rather than assuming that transition always
+    // ran, e.g. if it errored (see assets.js countersign route's handling
+    // of that case).
     const legal = await db.clients.query(
-      `SELECT status FROM pcm_legal_attestations
+      `SELECT status, outcome FROM pcm_legal_attestations
        WHERE client_id = $1 AND asset_id = $2 ORDER BY entered_at DESC LIMIT 1`, [client_id, asset_id]
     );
-    const legalStatus = legal.rows[0]?.status;
-    if (legalStatus !== 'confirmed') {
-      errors.push(legalStatus === 'pending_countersign'
-        ? 'Legal attestation recorded but not yet countersigned by an Administrator'
-        : 'No legal-review attestation on file');
+    const legalRow = legal.rows[0];
+    if (!legalRow || legalRow.status !== 'confirmed' || legalRow.outcome !== 'approved') {
+      if (legalRow?.status === 'confirmed' && legalRow.outcome === 'denied') {
+        errors.push('Legal review denied — package rejected, cannot proceed');
+      } else if (legalRow?.status === 'pending_countersign') {
+        errors.push('Legal attestation recorded but not yet countersigned by an Administrator');
+      } else {
+        errors.push('No legal-review attestation on file');
+      }
     }
 
     return errors;
