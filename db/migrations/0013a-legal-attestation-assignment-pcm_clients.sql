@@ -35,16 +35,16 @@ ALTER TABLE pcm_legal_attestations
 -- (pcm_legal_attestations and pcm_staff both live in pcm_clients) --
 -- a real FK, unlike asset_id above.
 --
--- assigned_role allows 'administrator' too, not just program_manager/
--- intake_officer -- confirmed explicitly: an Administrator may submit
+-- assigned_role allows 'facilitator' too, not just program_manager/
+-- intake_officer -- confirmed explicitly: a Facilitator may submit
 -- the entry route (superset rule), and with exactly two staff accounts
--- today (both Administrator), rejecting that would make this feature
--- unusable until non-admin accounts exist. An Administrator personally
+-- today (both Facilitator), rejecting that would make this feature
+-- unusable until non-admin accounts exist. A Facilitator personally
 -- handling a package is a normal scenario at this company's current
 -- size, not a design flaw to guard against.
 ALTER TABLE pcm_legal_attestations
   ADD COLUMN assigned_role text
-    CHECK (assigned_role = ANY (ARRAY['administrator', 'program_manager', 'intake_officer'])),
+    CHECK (assigned_role = ANY (ARRAY['facilitator', 'program_manager', 'intake_officer'])),
   ADD COLUMN assigned_staff_id uuid REFERENCES pcm_staff(staff_id);
 
 -- NOT NULL added as a separate step after the columns exist -- table is

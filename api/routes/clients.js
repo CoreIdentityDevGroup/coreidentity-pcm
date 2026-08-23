@@ -153,7 +153,7 @@ router.patch('/:id', authorize('intake_officer'), async (req, res, next) => {
 // leaving it listed here would misrepresent Intake Officer's actual scope
 // to anyone grepping authorize() calls, and this stub still points
 // callers at the real advance route below, which no longer accepts them.
-router.post('/:id/advance', authorize('administrator', 'program_manager'), (req, res) => {
+router.post('/:id/advance', authorize('facilitator', 'program_manager'), (req, res) => {
   res.status(410).json({
     error:       'Gone',
     message:     'This endpoint no longer advances pipeline stage. It performed no role-hierarchy, gate, or Sentinel checks, and never accepted the asset_id the guarded path requires. Use POST /api/v1/pipeline/advance instead.',
@@ -418,7 +418,7 @@ router.post('/:id/ofac', authorize('intake_officer'), (req, res) => {
 // Does NOT set pcm_clients.ofac_status -- the KYC gate does not accept this
 // until a second, distinct principal confirms via the countersign endpoint
 // below. A single request naming two people is not dual control.
-router.post('/:id/ofac/override', authorize('administrator'), async (req, res, next) => {
+router.post('/:id/ofac/override', authorize('facilitator'), async (req, res, next) => {
   try {
     // CLOSE-GAP-26: structured fields, not just free-text reason. "Two
     // people clicked confirm" is not an audit trail for a sanctions
@@ -454,7 +454,7 @@ router.post('/:id/ofac/override', authorize('administrator'), async (req, res, n
     res.status(201).json({
       result_id:  result.rows[0].result_id,
       status:     'PENDING_COUNTERSIGN',
-      message:    'Override initiated. A different Administrator must countersign before this affects the KYC gate.',
+      message:    'Override initiated. A different Facilitator must countersign before this affects the KYC gate.',
       initiated_by: initiatedBy
     });
   } catch (err) { next(err); }
@@ -467,7 +467,7 @@ router.post('/:id/ofac/override', authorize('administrator'), async (req, res, n
 // be overridden, so this uses its own provider/status/outcome vocabulary
 // rather than reusing MANUAL_OVERRIDE's, which would misrepresent the
 // audit trail as "every screen was an override."
-router.post('/:id/ofac/attest-out-of-band', authorize('administrator'), async (req, res, next) => {
+router.post('/:id/ofac/attest-out-of-band', authorize('facilitator'), async (req, res, next) => {
   try {
     const { reason, screening_provider, screening_date, reference_number } = req.body;
     if (!reason || !reason.trim()) {
@@ -500,7 +500,7 @@ router.post('/:id/ofac/attest-out-of-band', authorize('administrator'), async (r
     res.status(201).json({
       result_id:  result.rows[0].result_id,
       status:     'PENDING_ATTESTATION',
-      message:    'Attestation initiated. A different Administrator must confirm before this affects the KYC gate.',
+      message:    'Attestation initiated. A different Facilitator must confirm before this affects the KYC gate.',
       initiated_by: initiatedBy
     });
   } catch (err) { next(err); }
@@ -509,7 +509,7 @@ router.post('/:id/ofac/attest-out-of-band', authorize('administrator'), async (r
 // ─── CONFIRM OFAC OUT-OF-BAND ATTESTATION (CLOSE-GAP-26, step 2 of 2) ────────
 // Only after this succeeds does pcm_clients.ofac_status become
 // 'attested_out_of_band'.
-router.patch('/:id/ofac/attest-out-of-band/:result_id/confirm', authorize('administrator'), async (req, res, next) => {
+router.patch('/:id/ofac/attest-out-of-band/:result_id/confirm', authorize('facilitator'), async (req, res, next) => {
   try {
     const { reason } = req.body;
     if (!reason || !reason.trim()) {
@@ -569,7 +569,7 @@ router.patch('/:id/ofac/attest-out-of-band/:result_id/confirm', authorize('admin
 // Only after this succeeds does pcm_clients.ofac_status become
 // 'manual_review' -- never 'clear'. Distinguishable from a real screen in
 // every downstream query, permanently.
-router.patch('/:id/ofac/override/:result_id/countersign', authorize('administrator'), async (req, res, next) => {
+router.patch('/:id/ofac/override/:result_id/countersign', authorize('facilitator'), async (req, res, next) => {
   try {
     const { reason } = req.body;
     if (!reason || !reason.trim()) {
@@ -630,7 +630,7 @@ router.patch('/:id/ofac/override/:result_id/countersign', authorize('administrat
 // matching where valuations/documents already live, not client-level.
 
 // ─── SOFT DELETE CLIENT ───────────────────────────────────────────────────────
-router.delete('/:id', authorize('administrator'), async (req, res, next) => {
+router.delete('/:id', authorize('facilitator'), async (req, res, next) => {
   try {
     const result = await db.clients.query(
       `UPDATE pcm_clients SET deleted_at = NOW()

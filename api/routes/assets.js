@@ -496,13 +496,13 @@ router.post('/:id/legal-attestation', authorize('intake_officer', 'program_manag
       });
     }
 
-    // Administrator can enter too (superset rule, confirmed explicitly) --
-    // assigned_role/assigned_handler_role allow 'administrator' as a real
+    // Facilitator can enter too (superset rule, confirmed explicitly) --
+    // assigned_role/assigned_handler_role allow 'facilitator' as a real
     // value for exactly this case (see db/migrations/0013a/0013b's
     // comments). The stored role is purely descriptive; ownership
-    // authority is decided by staff_id match, not this value -- an
-    // Administrator-assigned asset is already fully accessible to that
-    // Administrator regardless.
+    // authority is decided by staff_id match, not this value -- a
+    // Facilitator-assigned asset is already fully accessible to that
+    // Facilitator regardless.
     const submitterRole = normalizeRole(req.user.role);
     const enteredBy = req.user.sub || req.user.email;
     const staffId = req.user.staff_id;
@@ -525,14 +525,14 @@ router.post('/:id/legal-attestation', authorize('intake_officer', 'program_manag
       status:          'pending_countersign',
       outcome,
       assigned_role:   submitterRole,
-      message:         'Legal attestation recorded and handler assigned. A different principal (Administrator) must countersign before this affects the KYC gate.',
+      message:         'Legal attestation recorded and handler assigned. A different principal (Facilitator) must countersign before this affects the KYC gate.',
       entered_by:      enteredBy
     });
   } catch (err) { next(err); }
 });
 
 // ─── COUNTERSIGN LEGAL-REVIEW ATTESTATION (step 2 of 2) ──────────────────────
-// Administrator-only. Now explicitly load-bearing, not just consistent
+// Facilitator-only. Now explicitly load-bearing, not just consistent
 // with the OFAC pattern: the handler is recording their OWN assignment
 // (self-referential by design, see the entry route above), so this
 // countersign is the ONLY independent check that legal actually made
@@ -551,14 +551,14 @@ router.post('/:id/legal-attestation', authorize('intake_officer', 'program_manag
 // row, and Sentinel gate every other stage change gets.
 //
 // COUNTERSIGN ROLE, widened (2026-08-17, second correction): any of the
-// three roles may countersign, not Administrator-only -- in practice
+// three roles may countersign, not Facilitator-only -- in practice
 // primarily Intake Officer or Program Manager. The distinct-principal
 // check below is unchanged and is what actually protects this: the
 // countersigner must differ from whoever entered the attestation,
 // regardless of which role either of them holds.
 //
 // This widening breaks an assumption the denial-rejection code below
-// used to be able to make: 'rejected' is Administrator-only in
+// used to be able to make: 'rejected' is Facilitator-only in
 // gate_roles, so passing the countersigning req.user straight through to
 // advancePipeline() would 403 for a Program Manager or Intake Officer
 // countersigner (unless they happened to also be this asset's assigned
@@ -569,25 +569,25 @@ router.post('/:id/legal-attestation', authorize('intake_officer', 'program_manag
 // rejected while writing this): checkRoleAuthority's system-gated branch
 // is a full early-return that REPLACES the human-role check with a
 // systemCheck-object requirement -- it would also change what
-// POST /pipeline/reject needs from an ordinary human Administrator,
+// POST /pipeline/reject needs from an ordinary human Facilitator,
 // breaking the existing working case to fix this one.
 //
 // Fixed instead by authorizing the internal advancePipeline() call with
 // a role-overridden actor: same sub/staff_id as the real countersigning
 // principal (so transitioned_by / the notes field below both show who
 // actually did this -- accountability preserved), role forced to
-// 'administrator' only for this one call, since isAdministrator() passes
+// 'facilitator' only for this one call, since isFacilitator() passes
 // every gate unconditionally. This is legitimate, not a bypass: the real
 // authorization decision already happened one step up (this route's own
 // authorize() + the distinct-principal check), the same as the
 // countersign-is-a-consequence-not-a-new-decision reasoning that
 // originally justified reusing req.user here at all. Known, accepted
 // imprecision: transition_role on this one row will read
-// 'administrator' even when the real countersigner is a Program Manager
+// 'facilitator' even when the real countersigner is a Program Manager
 // or Intake Officer -- reflects the trust level the action was actually
 // authorized at, not a literal role claim, and the notes field spells
 // out who actually countersigned in plain text for anyone auditing this.
-router.patch('/:id/legal-attestation/:attestation_id/countersign', authorize('administrator', 'program_manager', 'intake_officer'), async (req, res, next) => {
+router.patch('/:id/legal-attestation/:attestation_id/countersign', authorize('facilitator', 'program_manager', 'intake_officer'), async (req, res, next) => {
   try {
     const existing = await db.clients.query(
       `SELECT * FROM pcm_legal_attestations WHERE attestation_id = $1 AND asset_id = $2`,
@@ -625,14 +625,14 @@ router.patch('/:id/legal-attestation/:attestation_id/countersign', authorize('ad
     let rejection = null;
     if (attestation.outcome === 'denied') {
       const { advancePipeline } = require('../services/pipeline');
-      // role forced to 'administrator' for this one call only -- see this
+      // role forced to 'facilitator' for this one call only -- see this
       // route's header comment for why (real identity preserved via sub/
       // staff_id, the actual authorization already happened above).
       rejection = await advancePipeline({
         asset_id: req.params.id,
         client_id: attestation.client_id,
         to_stage: 'rejected',
-        user: { sub: req.user.sub, staff_id: req.user.staff_id, role: 'administrator' },
+        user: { sub: req.user.sub, staff_id: req.user.staff_id, role: 'facilitator' },
         notes: `Automatic: legal review denied (attestation ${attestation.attestation_id}, countersigned by ${countersignedBy}, actual role ${req.user.role})`
       });
       if (!rejection.success) {

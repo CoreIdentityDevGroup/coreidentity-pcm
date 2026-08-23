@@ -1,20 +1,20 @@
 'use strict';
 
 // Explicit permission sets, not a >= hierarchy (2026-08-17 access-control
-// redesign). Administrator/Program Manager/Intake Officer no longer rank
+// redesign). Facilitator/Program Manager/Intake Officer no longer rank
 // against each other -- each route/gate names exactly which roles may act
-// on it. Administrator remains a strict superset by definition (full
+// on it. Facilitator remains a strict superset by definition (full
 // platform access), enforced below by always passing the check, not by
-// listing 'administrator' in every single allow-list.
+// listing 'facilitator' in every single allow-list.
 //
-// ALIAS WINDOW (trade_group_owner -> administrator rename, db/migrations/
+// ALIAS WINDOW (trade_group_owner -> facilitator rename, db/migrations/
 // 0012): a JWT's role claim is frozen at sign time and can't be
-// retroactively rewritten. pcm_staff.role is updated to 'administrator'
+// retroactively rewritten. pcm_staff.role is updated to 'facilitator'
 // immediately (0012), so any FRESH login after this deploy signs
-// 'administrator'. But a token signed before this deploy (valid up to 8h,
+// 'facilitator'. But a token signed before this deploy (valid up to 8h,
 // auth.js's expiresIn) still carries the literal string
 // 'trade_group_owner' -- normalizeRole() is the one place that maps it
-// back to 'administrator' so those live sessions don't 403 the moment
+// back to 'facilitator' so those live sessions don't 403 the moment
 // this ships.
 //
 // REMOVE the alias in a tracked follow-up once 8h has definitively passed
@@ -23,14 +23,14 @@
 // permanent shim). Do not remove it early "because it looks done" --
 // removing it before every pre-deploy token has expired 403s anyone still
 // holding one.
-const ROLE_ALIAS = { trade_group_owner: 'administrator' };
+const ROLE_ALIAS = { trade_group_owner: 'facilitator' };
 
 function normalizeRole(role) {
   return ROLE_ALIAS[role] || role;
 }
 
-function isAdministrator(role) {
-  return normalizeRole(role) === 'administrator';
+function isFacilitator(role) {
+  return normalizeRole(role) === 'facilitator';
 }
 
 function authorize(...allowedRoles) {
@@ -39,7 +39,7 @@ function authorize(...allowedRoles) {
     if (!userRole) {
       return res.status(403).json({ error: 'Insufficient permissions', required: allowedRoles, current: 'none' });
     }
-    if (userRole === 'administrator' || allowedRoles.includes(userRole)) {
+    if (userRole === 'facilitator' || allowedRoles.includes(userRole)) {
       return next();
     }
     return res.status(403).json({
@@ -50,4 +50,4 @@ function authorize(...allowedRoles) {
   };
 }
 
-module.exports = { authorize, normalizeRole, isAdministrator };
+module.exports = { authorize, normalizeRole, isFacilitator };

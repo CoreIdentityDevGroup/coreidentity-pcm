@@ -2,12 +2,12 @@
 
 const db         = require('./db');
 const governance = require('./governance');
-const { normalizeRole, isAdministrator } = require('../middleware/authorize');
+const { normalizeRole, isFacilitator } = require('../middleware/authorize');
 
 // ─── PIPELINE STAGE DEFINITIONS ───────────────────────────────────────────────
 // gate_roles: explicit permission sets, not a >= hierarchy (2026-08-17
 // access-control redesign) -- replaces the old single gate_role + numeric
-// hierarchy lookup. Administrator is not listed per-row: it passes every
+// hierarchy lookup. Facilitator is not listed per-row: it passes every
 // gate by definition (see checkRoleAuthority below), same convention as
 // authorize.js. 'system' stages (tokenization/completed) are unchanged --
 // automated, gated on a recorded system check result, not a human role.
@@ -21,13 +21,13 @@ const STAGES = {
   // stale, unreachable permission entry, not a real one.
   kyc_verification: { order: 2, gate_roles: ['program_manager'], label: 'KYC / CIS / POF Verification' },
   appraisal_review: { order: 3, gate_roles: ['program_manager'], label: 'Appraisal / Valuation Review' },
-  bank_assignment:  { order: 4, gate_roles: [],                  label: 'Trader Bank Assignment' },   // Administrator only
-  collateralization:{ order: 5, gate_roles: [],                  label: 'Collateralization' },        // Administrator only
+  bank_assignment:  { order: 4, gate_roles: [],                  label: 'Trader Bank Assignment' },   // Facilitator only
+  collateralization:{ order: 5, gate_roles: [],                  label: 'Collateralization' },        // Facilitator only
   monetization:     { order: 6, gate_roles: ['program_manager'], label: 'Monetization' },
   securitization:   { order: 7, gate_roles: ['program_manager'], label: 'Securitization' },
   tokenization:     { order: 8, gate_roles: ['system'],          label: 'Tokenization' },
   completed:        { order: 9, gate_roles: ['system'],          label: 'Completed' },
-  rejected:         { order: 0, gate_roles: [],                  label: 'Rejected' },                 // Administrator only
+  rejected:         { order: 0, gate_roles: [],                  label: 'Rejected' },                 // Facilitator only
   on_hold:          { order: 0, gate_roles: ['program_manager'], label: 'On Hold' }
 };
 
@@ -187,7 +187,7 @@ const GATE_REQUIREMENTS = {
       } else if (legalRow?.status === 'pending_countersign') {
         // Stale wording fixed in passing (found while touching this
         // function for the POF gate change above): countersign was
-        // widened to all three roles this session, not Administrator-only.
+        // widened to all three roles this session, not Facilitator-only.
         errors.push('Legal attestation recorded but not yet countersigned');
       } else {
         errors.push('No legal-review attestation on file');
@@ -408,8 +408,8 @@ function checkRoleAuthority(to_stage, user, systemCheck, assetOwnership) {
     return { authorized: true };
   }
 
-  // Explicit permission set, not a >= hierarchy. Administrator passes
-  // every gate by definition (isAdministrator, alias-aware for
+  // Explicit permission set, not a >= hierarchy. Facilitator passes
+  // every gate by definition (isFacilitator, alias-aware for
   // pre-rename tokens). Additive third path (2026-08-17): the asset's
   // assigned handler (pcm_assets.assigned_handler_staff_id, set at legal-
   // attestation entry) may also act, regardless of this stage's own
@@ -425,12 +425,12 @@ function checkRoleAuthority(to_stage, user, systemCheck, assetOwnership) {
   const isAssignedHandler = !!(assetOwnership?.assigned_handler_staff_id &&
     assetOwnership.assigned_handler_staff_id === user.staff_id);
 
-  const authorized = isAdministrator(user.role) ||
+  const authorized = isFacilitator(user.role) ||
     stage.gate_roles.includes(normalizeRole(user.role)) ||
     isAssignedHandler;
 
   if (!authorized) {
-    const required = stage.gate_roles.length ? stage.gate_roles.join(' or ') : 'Administrator';
+    const required = stage.gate_roles.length ? stage.gate_roles.join(' or ') : 'Facilitator';
     return {
       authorized: false,
       reason: `Stage '${to_stage}' requires role '${required}' (or being this asset's assigned handler). Current role: '${user.role}'`

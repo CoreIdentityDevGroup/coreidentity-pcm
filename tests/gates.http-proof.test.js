@@ -92,7 +92,7 @@ describe('Step 4d — real HTTP proof of gate enforcement', () => {
     // kyc_verification's gate_roles is ['program_manager'] (explicit set,
     // not a hierarchy -- 2026-08-17 redesign, flipped from
     // ['intake_officer'] the same day -- see STAGES' comment);
-    // Administrator passes every gate by definition. 'system' is in
+    // Facilitator passes every gate by definition. 'system' is in
     // neither category and is deliberately rejected here. Intake Officer
     // would ALSO be rejected now (both by this gate and, more
     // fundamentally, by the route itself no longer accepting them at
@@ -127,10 +127,10 @@ describe('Step 4d — real HTTP proof of gate enforcement', () => {
     expect(toHold.status).toBe(200);
     expect(toHold.body.success).toBe(true);
 
-    // Deliberately still 'trade_group_owner', not 'administrator' -- this
+    // Deliberately still 'trade_group_owner', not 'facilitator' -- this
     // doubles as a regression test of the alias window (authorize.js's
     // normalizeRole()): a token minted with the pre-rename role string
-    // must still pass an Administrator-level gate. See
+    // must still pass a Facilitator-level gate. See
     // tests/access-control-redesign.test.js for the explicit alias tests.
     const resumed = await request(app)
       .post('/api/v1/pipeline/resume')

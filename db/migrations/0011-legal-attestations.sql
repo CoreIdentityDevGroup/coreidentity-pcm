@@ -4,7 +4,7 @@
 -- two-step entry/countersign mechanic. Records that external counsel (no
 -- portal account -- named by text, not a staff_id) reviewed and approved;
 -- the platform never performs the review itself. Entered by an Intake
--- Officer, countersigned by a DIFFERENT principal (Administrator, per
+-- Officer, countersigned by a DIFFERENT principal (Facilitator, per
 -- this session's separation-of-duties decision) before it satisfies the
 -- kyc_verification gate.
 --

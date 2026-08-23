@@ -14,7 +14,7 @@ const { advancePipeline, validateGate } = require('../api/services/pipeline');
 const db = require('../api/services/db');
 const fx = require('./fixtures');
 
-// Deliberately kept as 'trade_group_owner', not renamed to 'administrator'
+// Deliberately kept as 'trade_group_owner', not renamed to 'facilitator'
 // -- doubles as an alias-window regression test (checkRoleAuthority /
 // authorize.js's normalizeRole(), 2026-08-17 redesign): a token minted
 // with the pre-rename role string must still pass every gate. See

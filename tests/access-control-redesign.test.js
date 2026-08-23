@@ -2,7 +2,7 @@
 // (corrected same day -- legal assigns a handler by asset type, not just
 // reviews), the explicit gate_roles permission sets replacing
 // pipeline.js's old hierarchy plus the additive assigned-handler path,
-// and the trade_group_owner -> administrator rename's alias window. Real
+// and the trade_group_owner -> facilitator rename's alias window. Real
 // Express app, real HTTP requests via supertest, real isolated local
 // database (see tests/env.setup.js) -- same pattern as
 // gates.http-proof.test.js and password-reset.test.js.
@@ -31,7 +31,7 @@ function tokenFor(role, sub = 'test-fixture', staff_id = 'test-staff-id') {
 // comment) -- any test that actually records an attestation needs a real
 // staff row behind the token's staff_id, not an arbitrary string.
 async function staffToken(role) {
-  const staff = await fx.createStaff({ role: role === 'administrator' ? 'administrator' : role });
+  const staff = await fx.createStaff({ role: role === 'facilitator' ? 'facilitator' : role });
   return { token: tokenFor(role, staff.email, staff.staff_id), staff };
 }
 
@@ -83,7 +83,7 @@ describe('checkRoleAuthority is synchronous — the missed-await failure mode is
 });
 
 describe('Legal-review attestation — asset-scoped, two-step entry/countersign', () => {
-  test('entry by Intake Officer, countersign by Administrator, satisfies the kyc_verification gate and assigns the handler', async () => {
+  test('entry by Intake Officer, countersign by Facilitator, satisfies the kyc_verification gate and assigns the handler', async () => {
     const client_id = await fx.createClient();
     const { asset_id } = await fx.createAsset(client_id);
     await fx.addKycDocument(client_id);
@@ -124,7 +124,7 @@ describe('Legal-review attestation — asset-scoped, two-step entry/countersign'
     // report the POF side as still pending too.
     expect(pendingErrors).toEqual(expect.arrayContaining(['Proof of Funds outcome recorded but the underlying legal attestation is not yet countersigned']));
 
-    const admin = await staffToken('administrator');
+    const admin = await staffToken('facilitator');
     const countersignRes = await request(app)
       .patch(`/api/v1/assets/${asset_id}/legal-attestation/${entryRes.body.attestation_id}/countersign`)
       .set('Authorization', `Bearer ${admin.token}`)
@@ -151,16 +151,16 @@ describe('Legal-review attestation — asset-scoped, two-step entry/countersign'
     expect(entryRes.body.assigned_role).toBe('program_manager');
   });
 
-  test('Administrator entry works too (superset rule) and records assigned_role: administrator', async () => {
+  test('Facilitator entry works too (superset rule) and records assigned_role: facilitator', async () => {
     const client_id = await fx.createClient();
     const { asset_id } = await fx.createAsset(client_id);
-    const admin = await staffToken('administrator');
+    const admin = await staffToken('facilitator');
     const entryRes = await request(app)
       .post(`/api/v1/assets/${asset_id}/legal-attestation`)
       .set('Authorization', `Bearer ${admin.token}`)
       .send({ counsel_name: 'Jane Counsel', review_date: '2026-08-17', reference: 'Matter #3', outcome: 'approved' });
     expect(entryRes.status).toBe(201);
-    expect(entryRes.body.assigned_role).toBe('administrator');
+    expect(entryRes.body.assigned_role).toBe('facilitator');
   });
 
   test('assigned_staff_id/assigned_role come from req.user, not the request body -- a caller cannot claim an assignment for someone else', async () => {
@@ -193,9 +193,9 @@ describe('Legal-review attestation — asset-scoped, two-step entry/countersign'
       .send({ counsel_name: 'John Counsel', review_date: '2026-08-17', reference: 'Matter #1', outcome: 'approved' });
     expect(entryRes.status).toBe(201);
 
-    // Same person, now presenting an Administrator-role token (their
+    // Same person, now presenting a Facilitator-role token (their
     // email is the identity dual control keys off, not the role claim).
-    const adminToken = tokenFor('administrator', staff.email, staff.staff_id);
+    const adminToken = tokenFor('facilitator', staff.email, staff.staff_id);
     const countersignRes = await request(app)
       .patch(`/api/v1/assets/${asset_id}/legal-attestation/${entryRes.body.attestation_id}/countersign`)
       .set('Authorization', `Bearer ${adminToken}`)
@@ -207,7 +207,7 @@ describe('Legal-review attestation — asset-scoped, two-step entry/countersign'
   });
 
   // Inverted 2026-08-17 (second correction): countersign widened from
-  // Administrator-only to all three roles -- primarily Intake Officer or
+  // Facilitator-only to all three roles -- primarily Intake Officer or
   // Program Manager in practice. The distinct-principal check is what
   // actually protects this, not the role gate -- covered by the three
   // tests below, one per role pairing.
@@ -313,7 +313,7 @@ describe('Denial — same dual control as approval, terminal only once countersi
       .send({ counsel_name: 'X', review_date: '2026-08-17', reference: 'Denied — sanctioned jurisdiction', outcome: 'denied' });
     expect(entryRes.status).toBe(201);
 
-    const admin = await staffToken('administrator');
+    const admin = await staffToken('facilitator');
     const countersignRes = await request(app)
       .patch(`/api/v1/assets/${asset_id}/legal-attestation/${entryRes.body.attestation_id}/countersign`)
       .set('Authorization', `Bearer ${admin.token}`)
@@ -333,7 +333,7 @@ describe('Denial — same dual control as approval, terminal only once countersi
   });
 
   // Regression test for the exact interaction the countersign-widening
-  // correction created: 'rejected' is Administrator-only in gate_roles,
+  // correction created: 'rejected' is Facilitator-only in gate_roles,
   // so a Program Manager countersigning a denial would 403 inside the
   // internal advancePipeline() call unless that call's actor is
   // specifically authorized around this -- see the countersign route's
@@ -377,7 +377,7 @@ describe('Denial — same dual control as approval, terminal only once countersi
       .post(`/api/v1/assets/${asset_id}/legal-attestation`)
       .set('Authorization', `Bearer ${io.token}`)
       .send({ counsel_name: 'X', review_date: '2026-08-17', reference: 'Y', outcome: 'denied' });
-    const admin = await staffToken('administrator');
+    const admin = await staffToken('facilitator');
     await request(app)
       .patch(`/api/v1/assets/${asset_id}/legal-attestation/${entryRes.body.attestation_id}/countersign`)
       .set('Authorization', `Bearer ${admin.token}`)
@@ -500,7 +500,7 @@ describe('Additive owner-based access — assignment adds a path, does not exclu
       .set('Authorization', `Bearer ${assignedIo.token}`)
       .send({ counsel_name: 'X', review_date: '2026-08-17', reference: 'Y', outcome: 'approved' });
     expect(entryRes.status).toBe(201);
-    const admin = await staffToken('administrator');
+    const admin = await staffToken('facilitator');
     const countersignRes = await request(app)
       .patch(`/api/v1/assets/${asset_id}/legal-attestation/${entryRes.body.attestation_id}/countersign`)
       .set('Authorization', `Bearer ${admin.token}`)
@@ -576,7 +576,7 @@ describe('Explicit permission sets — no inheritance between Program Manager an
   // PATCH .../pof/:pof_id/legal-outcome, recording legal's POF decision,
   // open to Intake Officer or Program Manager (same gate as legal-
   // attestation entry), requiring a real attestation_id.
-  test('POF legal-outcome recording is open to Intake Officer and Program Manager, not Administrator-only or Program-Manager-only', async () => {
+  test('POF legal-outcome recording is open to Intake Officer and Program Manager, not Facilitator-only or Program-Manager-only', async () => {
     const client_id = await fx.createClient();
     const { asset_id } = await fx.createAsset(client_id);
     const io = await staffToken('intake_officer');
@@ -639,8 +639,8 @@ describe('Explicit permission sets — no inheritance between Program Manager an
   // inverted -- referral-source/lead management is a different domain
   // from collecting and routing a specific client's package to legal,
   // not part of "collect and route only." Intake Officer is now excluded.
-  test('Adjustment 2 (revised): Referrers and Leads narrow to Administrator and Program Manager, Intake Officer excluded', async () => {
-    for (const role of ['administrator', 'program_manager']) {
+  test('Adjustment 2 (revised): Referrers and Leads narrow to Facilitator and Program Manager, Intake Officer excluded', async () => {
+    for (const role of ['facilitator', 'program_manager']) {
       const res = await request(app)
         .get('/api/v1/referrers')
         .set('Authorization', `Bearer ${tokenFor(role)}`)
@@ -659,17 +659,17 @@ describe('Explicit permission sets — no inheritance between Program Manager an
     expect(ioLeadsRes.status).toBe(403);
   });
 
-  test('Administrator passes every route regardless of listed roles (strict superset)', async () => {
+  test('Facilitator passes every route regardless of listed roles (strict superset)', async () => {
     const res = await request(app)
       .post('/api/v1/assets')
-      .set('Authorization', `Bearer ${tokenFor('administrator')}`)
+      .set('Authorization', `Bearer ${tokenFor('facilitator')}`)
       .send({ client_id: await fx.createClient(), asset_type: 'real_estate' });
     expect(res.status).toBe(201);
   });
 });
 
 describe('Pipeline gate_roles — explicit sets, not a hierarchy', () => {
-  test('Program Manager is rejected for bank_assignment (Administrator-only stage) -- no inheritance', () => {
+  test('Program Manager is rejected for bank_assignment (Facilitator-only stage) -- no inheritance', () => {
     const result = checkRoleAuthority('bank_assignment', { role: 'program_manager', staff_id: 'x' }, undefined, null);
     expect(result.authorized).toBe(false);
   });
@@ -688,7 +688,7 @@ describe('Pipeline gate_roles — explicit sets, not a hierarchy', () => {
   // today -- confirmed while making this change, no valid isValidTransition
   // path ever reaches to_stage:'intake', since assets start there via
   // direct creation, not advancePipeline()). Program Manager is now the
-  // only non-Administrator human role with pipeline-advancement authority
+  // only non-Facilitator human role with pipeline-advancement authority
   // anywhere in STAGES. The "explicit sets, not hierarchy" pairing below
   // is Intake Officer/kyc_verification (rejected) vs. Program Manager on
   // both of its own stages (authorized) -- there's no longer a second
@@ -703,31 +703,31 @@ describe('Pipeline gate_roles — explicit sets, not a hierarchy', () => {
     expect(checkRoleAuthority('appraisal_review', { role: 'program_manager', staff_id: 'x' }, undefined, null).authorized).toBe(true);
   });
 
-  test('Administrator is authorized for every human-gated stage', () => {
+  test('Facilitator is authorized for every human-gated stage', () => {
     for (const stage of ['kyc_verification', 'appraisal_review', 'bank_assignment', 'collateralization', 'monetization', 'securitization', 'rejected', 'on_hold']) {
-      expect(checkRoleAuthority(stage, { role: 'administrator', staff_id: 'x' }, undefined, null).authorized).toBe(true);
+      expect(checkRoleAuthority(stage, { role: 'facilitator', staff_id: 'x' }, undefined, null).authorized).toBe(true);
     }
   });
 });
 
-describe('Rename alias window — trade_group_owner still works as Administrator', () => {
-  test('a token minted with the pre-rename role string passes an Administrator-only route', async () => {
+describe('Rename alias window — trade_group_owner still works as Facilitator', () => {
+  test('a token minted with the pre-rename role string passes a Facilitator-only route', async () => {
     const res = await request(app)
       .delete(`/api/v1/clients/${await fx.createClient()}`)
       .set('Authorization', `Bearer ${tokenFor('trade_group_owner')}`);
     expect(res.status).toBe(200);
   });
 
-  test('a token minted with the pre-rename role string passes an Administrator-only pipeline gate', () => {
+  test('a token minted with the pre-rename role string passes a Facilitator-only pipeline gate', () => {
     const result = checkRoleAuthority('bank_assignment', { role: 'trade_group_owner', staff_id: 'x' }, undefined, null);
     expect(result.authorized).toBe(true);
   });
 
-  test('a fresh login after the rename issues role: administrator, not trade_group_owner', async () => {
-    const staff = await fx.createStaff({ role: 'administrator', password: 'fresh-login-pass-1' });
+  test('a fresh login after the rename issues role: facilitator, not trade_group_owner', async () => {
+    const staff = await fx.createStaff({ role: 'facilitator', password: 'fresh-login-pass-1' });
     const res = await request(app).post('/api/v1/auth/login').send({ email: staff.email, password: 'fresh-login-pass-1' });
     expect(res.status).toBe(200);
     const payload = JSON.parse(Buffer.from(res.body.token.split('.')[1], 'base64url').toString());
-    expect(payload.role).toBe('administrator');
+    expect(payload.role).toBe('facilitator');
   });
 });

@@ -29,7 +29,7 @@ const ownAssetId = requireOwnClientOrStaff(async req => {
 // GET /api/v1/pipeline  — mounted with authenticate in app.js   /* fix-pipeline-summary */
 // Platform-wide, cross-client (recent transitions across every client) --
 // staff-only, same shape as /board and forms.js's monitoring/alerts.
-router.get('/', authorize('administrator','program_manager','intake_officer'), async (_req, res, next) => {
+router.get('/', authorize('facilitator','program_manager','intake_officer'), async (_req, res, next) => {
   try {
     const db = require('../services/db');
     const byStatus = await db.clients.query(
@@ -85,7 +85,7 @@ router.get('/status/:asset_id', ownAssetId, async (req, res, next) => {
 // never pass this outer authorize() at all. Recording what legal
 // decided (legal-attestation entry/countersign, POF outcome) stays with
 // Intake Officer; moving the deal forward to the next stage does not.
-router.post('/advance', authorize('administrator','program_manager'), async (req, res, next) => {
+router.post('/advance', authorize('facilitator','program_manager'), async (req, res, next) => {
   try {
     const { asset_id, client_id, to_stage, notes } = req.body;
 
@@ -132,7 +132,7 @@ router.post('/validate', ownAssetId, async (req, res, next) => {
 // ─── GET PIPELINE BOARD (all active assets by stage) ─────────────────────────
 // Cross-client by design (every active asset org-wide) -- staff-only. A
 // 'client' role has no legitimate use for the full trade pipeline board.
-router.get('/board', authorize('administrator','program_manager','intake_officer'), async (req, res, next) => {
+router.get('/board', authorize('facilitator','program_manager','intake_officer'), async (req, res, next) => {
   try {
     const db = require('../services/db');
     const result = await db.assets.query(
@@ -161,7 +161,7 @@ router.get('/board', authorize('administrator','program_manager','intake_officer
 });
 
 // ─── REJECT ASSET ─────────────────────────────────────────────────────────────
-router.post('/reject', authorize('administrator'), async (req, res, next) => {
+router.post('/reject', authorize('facilitator'), async (req, res, next) => {
   try {
     const { asset_id, client_id, reason } = req.body;
     if (!asset_id || !client_id || !reason) {

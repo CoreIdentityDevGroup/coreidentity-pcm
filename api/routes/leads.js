@@ -18,7 +18,7 @@ const router  = express.Router();
 // package to legal -- not part of "collect and route only."
 
 // GET /api/v1/leads
-router.get('/', authorize('administrator','program_manager'), async (req, res) => {
+router.get('/', authorize('facilitator','program_manager'), async (req, res) => {
   const { status, limit = 50 } = req.query;
   try {
     const query = status
@@ -40,7 +40,7 @@ router.get('/', authorize('administrator','program_manager'), async (req, res) =
 });
 
 // POST /api/v1/leads
-router.post('/', authorize('administrator','program_manager'), async (req, res) => {
+router.post('/', authorize('facilitator','program_manager'), async (req, res) => {
   const { client_name, contact_info, service_type,
           referral_type, referrer_id, notes } = req.body;
   if (!client_name)
@@ -63,7 +63,7 @@ router.post('/', authorize('administrator','program_manager'), async (req, res) 
 });
 
 // PATCH /api/v1/leads/:id
-router.patch('/:id', authorize('administrator','program_manager'), async (req, res) => {
+router.patch('/:id', authorize('facilitator','program_manager'), async (req, res) => {
   const { status, notes } = req.body;
   try {
     const result = await db.clients.query(

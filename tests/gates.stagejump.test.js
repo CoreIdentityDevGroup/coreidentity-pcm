@@ -18,7 +18,7 @@
 // no test.
 //
 // role: 'trade_group_owner' below is deliberately not renamed to
-// 'administrator' -- doubles as an alias-window regression test
+// 'facilitator' -- doubles as an alias-window regression test
 // (2026-08-17 access-control redesign, authorize.js's normalizeRole()).
 // See tests/access-control-redesign.test.js for the explicit alias tests.
 'use strict';

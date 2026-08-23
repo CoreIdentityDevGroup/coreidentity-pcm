@@ -10,14 +10,14 @@
 -- stage-authority check. Nullable: most assets have no assigned handler
 -- until legal review happens.
 --
--- assigned_handler_role allows 'administrator' too, matching 0013a's
--- assigned_role -- an Administrator may be the assigned handler
+-- assigned_handler_role allows 'facilitator' too, matching 0013a's
+-- assigned_role -- a Facilitator may be the assigned handler
 -- (confirmed explicitly; with exactly two staff accounts today, both
--- Administrator, this keeps the feature usable). Note this column isn't
+-- Facilitator, this keeps the feature usable). Note this column isn't
 -- actually read for authorization logic -- checkRoleAuthority's
 -- owner-based check compares assigned_handler_staff_id to the caller's
--- staff_id only, not this role value, since an assigned Administrator
--- already passes every gate via the isAdministrator check that runs
+-- staff_id only, not this role value, since an assigned Facilitator
+-- already passes every gate via the isFacilitator check that runs
 -- first. This column exists for display/audit legibility, matching
 -- pcm_legal_attestations.assigned_role, not because the gate logic
 -- consults it.
@@ -27,7 +27,7 @@
 -- Same cross-database reasoning as 0013a's asset_id.
 ALTER TABLE pcm_assets
   ADD COLUMN assigned_handler_role text
-    CHECK (assigned_handler_role IS NULL OR assigned_handler_role = ANY (ARRAY['administrator', 'program_manager', 'intake_officer'])),
+    CHECK (assigned_handler_role IS NULL OR assigned_handler_role = ANY (ARRAY['facilitator', 'program_manager', 'intake_officer'])),
   ADD COLUMN assigned_handler_staff_id uuid;
 
 CREATE INDEX IF NOT EXISTS idx_pcm_assets_assigned_handler
