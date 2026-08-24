@@ -16,25 +16,32 @@
 -- authorization-check time. See authorize.js's header comment for the
 -- removal condition/date.
 --
--- Statement order below was originally UPDATE-then-constraint, which is
--- wrong: pcm_staff_role_check only permitted the old three role values,
--- so the UPDATE violated its own table's constraint before the ALTER
--- TABLE loosening it ever ran. Found live on first apply attempt
--- (2026-08-24, prod), nothing was applied since the UPDATE's failure
--- rolled back cleanly. Fix: loosen the constraint first, then write the
--- data. Confirmed safe to keep ALTER TYPE ... ADD VALUE in the same
--- transaction as the UPDATE on Postgres 15.17 (prod's version) -- the
--- post-PG12 restriction only blocks *using* a newly added enum value in
--- the transaction that added it, and nothing here does that (pcm_staff.role
--- is plain text, not the enum).
+-- Statement order below went through two broken attempts against prod
+-- (2026-08-24), both rolled back cleanly with nothing written:
+--   1. Original: UPDATE before dropping/loosening the constraint.
+--      pcm_staff_role_check only permitted the old three values, so the
+--      UPDATE violated its own table's constraint.
+--   2. First fix attempt: DROP old constraint, immediately ADD the new
+--      (tightened) constraint, then UPDATE. Postgres validates a CHECK
+--      constraint against ALL EXISTING ROWS at ADD time -- at that point
+--      the data still said 'trade_group_owner', which the new, already-
+--      tightened constraint doesn't permit. The ADD itself failed.
+-- Correct order: DROP the constraint (no data yet to validate), UPDATE
+-- the data, THEN ADD the tightened constraint -- it now validates
+-- against already-clean data. Confirmed safe to keep ALTER TYPE ... ADD
+-- VALUE in the same transaction as the UPDATE on Postgres 15.17 (prod's
+-- version) -- the post-PG12 restriction only blocks *using* a newly
+-- added enum value in the transaction that added it, and nothing here
+-- does that (pcm_staff.role is plain text, not the enum).
 
 BEGIN;
 
 ALTER TABLE pcm_staff DROP CONSTRAINT pcm_staff_role_check;
-ALTER TABLE pcm_staff ADD CONSTRAINT pcm_staff_role_check
-  CHECK (role = ANY (ARRAY['facilitator'::text, 'program_manager'::text, 'intake_officer'::text]));
 
 UPDATE pcm_staff SET role = 'facilitator' WHERE role = 'trade_group_owner';
+
+ALTER TABLE pcm_staff ADD CONSTRAINT pcm_staff_role_check
+  CHECK (role = ANY (ARRAY['facilitator'::text, 'program_manager'::text, 'intake_officer'::text]));
 
 -- pcm_user_role: a SEPARATE role representation from pcm_staff.role
 -- (text + CHECK, fixed above) -- a genuine Postgres ENUM type, used only
