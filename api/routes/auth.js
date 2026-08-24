@@ -202,14 +202,14 @@ router.post('/reset-password', async (req, res) => {
   }
 });
 
-// ─── ADMIN-TRIGGERED RESET (Administrator only) ────────────────────────────
+// ─── ADMIN-TRIGGERED RESET (Facilitator only) ────────────────────────────
 // Always triggers the same reset-email flow as forgot-password -- never
 // sets a password directly (Decision, this session: no path exists for an
 // admin to ever know another user's credential; the audit record shows a
 // reset was initiated, not a password handed over). Same token/TTL/
 // single-use mechanism as self-service, distinguished only by
 // initiated_by being the admin's identity instead of null.
-router.post('/admin/reset-password', authenticate, authorize('trade_group_owner'), async (req, res) => {
+router.post('/admin/reset-password', authenticate, authorize('facilitator'), async (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ error: 'email required' });
 

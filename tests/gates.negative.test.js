@@ -14,6 +14,11 @@ const { advancePipeline, validateGate } = require('../api/services/pipeline');
 const db = require('../api/services/db');
 const fx = require('./fixtures');
 
+// Deliberately kept as 'trade_group_owner', not renamed to 'facilitator'
+// -- doubles as an alias-window regression test (checkRoleAuthority /
+// authorize.js's normalizeRole(), 2026-08-17 redesign): a token minted
+// with the pre-rename role string must still pass every gate. See
+// tests/access-control-redesign.test.js for the explicit alias tests.
 const SYSTEM_USER = { sub: 'test-fixture', role: 'trade_group_owner' };
 
 afterAll(async () => {
@@ -48,7 +53,7 @@ describe('kyc_verification gate', () => {
 
     const errors = await validateGate('kyc_verification', asset_id, client_id);
     expect(errors.length).toBeGreaterThan(0);
-    expect(errors[0]).toMatch(/OFAC screening not satisfied/);
+    expect(errors).toEqual(expect.arrayContaining([expect.stringMatching(/OFAC screening not satisfied/)]));
   });
 
   test('legacy/unrecognized ofac_status (e.g. stale "clear") -> blocks, not silently accepted', async () => {
@@ -64,7 +69,7 @@ describe('kyc_verification gate', () => {
 
     const errors = await validateGate('kyc_verification', asset_id, client_id);
     expect(errors.length).toBeGreaterThan(0);
-    expect(errors[0]).toMatch(/OFAC screening not satisfied/);
+    expect(errors).toEqual(expect.arrayContaining([expect.stringMatching(/OFAC screening not satisfied/)]));
   });
 
   test('full evidence + confirmed out-of-band attestation -> passes gate check', async () => {

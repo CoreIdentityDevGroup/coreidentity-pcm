@@ -1,0 +1,19 @@
+-- Phase B (2026-08-24): wire pcm_banks to pcm_bank_assignments. Run
+-- against the pcm_assets database (pcm_bank_assignments lives there).
+--
+-- Plain uuid, NOT a foreign key -- pcm_banks lives in the pcm_clients
+-- database (same cross-database reasoning as 0020-0022).
+--
+-- Additive alongside the existing free-text bank_name/bank_jurisdiction/
+-- bank_swift_code columns, not a replacement -- those remain the
+-- point-in-time snapshot of what was assigned (same reasoning
+-- pcm_platform_submissions' manifest column uses: an assignment record
+-- should still show what was assigned even if the reference row later
+-- changes). bank_id is the live pointer back to the catalog row, for
+-- callers that have a real bank_id to send.
+--
+-- Nullable: POST /assets/:id/bank-assignment (api/routes/assets.js,
+-- same commit) accepts bank_id as optional and validates it against
+-- pcm_banks when provided; existing callers that only send the free-text
+-- fields are unaffected.
+ALTER TABLE pcm_bank_assignments ADD COLUMN bank_id uuid;

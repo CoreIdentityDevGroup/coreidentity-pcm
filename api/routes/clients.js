@@ -14,7 +14,7 @@ const ownClient = requireOwnClientOrStaff(req => req.params.id);
 // Staff-only: a multi-client listing has no legitimate use for a client-role
 // token (their own record is available via GET /:id). Same staff-role tuple
 // already used for POST/PATCH on this resource, not a new boundary.
-router.get('/', authorize('trade_group_owner','program_manager','intake_officer'), async (req, res, next) => {
+router.get('/', authorize('intake_officer'), async (req, res, next) => {
   try {
     const { stage, assigned_to, country, limit = 50, offset = 0 } = req.query;
     let query = `SELECT * FROM pcm_clients WHERE deleted_at IS NULL`;
@@ -46,7 +46,7 @@ router.get('/:id', ownClient, async (req, res, next) => {
 });
 
 // ─── CREATE CLIENT ────────────────────────────────────────────────────────────
-router.post('/', authorize('trade_group_owner','program_manager','intake_officer'), async (req, res, next) => {
+router.post('/', authorize('intake_officer'), async (req, res, next) => {
   try {
     const {
       full_name, email, phone, country_of_origin, jurisdiction,
@@ -107,7 +107,7 @@ router.post('/', authorize('trade_group_owner','program_manager','intake_officer
 });
 
 // ─── UPDATE CLIENT ────────────────────────────────────────────────────────────
-router.patch('/:id', authorize('trade_group_owner','program_manager','intake_officer'), async (req, res, next) => {
+router.patch('/:id', authorize('intake_officer'), async (req, res, next) => {
   try {
     const allowed = ['full_name','email','phone','country_of_origin','jurisdiction',
                      'referral_source','referral_contact','notes',
@@ -148,7 +148,12 @@ router.patch('/:id', authorize('trade_group_owner','program_manager','intake_off
 // advancing a client's stage independent of an asset in the guarded
 // model. Route kept (not deleted) so a caller gets 410 Gone instead of a
 // 404 that could pass for a typo.
-router.post('/:id/advance', authorize('trade_group_owner','program_manager','intake_officer'), (req, res) => {
+// 2026-08-17 (Intake Officer scope, third revision): intake_officer
+// removed from this gate too, even though the route is a dead 410 stub --
+// leaving it listed here would misrepresent Intake Officer's actual scope
+// to anyone grepping authorize() calls, and this stub still points
+// callers at the real advance route below, which no longer accepts them.
+router.post('/:id/advance', authorize('facilitator', 'program_manager'), (req, res) => {
   res.status(410).json({
     error:       'Gone',
     message:     'This endpoint no longer advances pipeline stage. It performed no role-hierarchy, gate, or Sentinel checks, and never accepted the asset_id the guarded path requires. Use POST /api/v1/pipeline/advance instead.',
@@ -184,7 +189,7 @@ router.get('/:id/kyc', ownClient, async (req, res, next) => {
 });
 
 // ─── REGISTER KYC DOCUMENT (metadata only — upload via signed URL) ────────────
-router.post('/:id/kyc', authorize('trade_group_owner','program_manager','intake_officer'), async (req, res, next) => {
+router.post('/:id/kyc', authorize('intake_officer'), async (req, res, next) => {
   try {
     const { doc_type, doc_subtype, file_name, file_size_bytes,
             content_type, submission_date, gcs_bucket, gcs_object_path } = req.body;
@@ -229,7 +234,7 @@ router.get('/:id/id-documents', ownClient, async (req, res, next) => {
 });
 
 // ─── REGISTER ID DOCUMENT (metadata only — upload via signed URL) ─────────────
-router.post('/:id/id-documents', authorize('trade_group_owner','program_manager','intake_officer'), async (req, res, next) => {
+router.post('/:id/id-documents', authorize('intake_officer'), async (req, res, next) => {
   try {
     const { doc_type, id_number, issuing_country, expiry_date,
             file_name, content_type, gcs_bucket, gcs_object_path } = req.body;
@@ -269,7 +274,7 @@ router.get('/:id/pof', ownClient, async (req, res, next) => {
 });
 
 // ─── REGISTER POF RECORD ──────────────────────────────────────────────────────
-router.post('/:id/pof', authorize('trade_group_owner','program_manager','intake_officer'), async (req, res, next) => {
+router.post('/:id/pof', authorize('intake_officer'), async (req, res, next) => {
   try {
     const { declared_amount, currency, issuing_bank, issuing_bank_swift,
             submission_date, gcs_bucket, gcs_object_path } = req.body;
@@ -312,23 +317,6 @@ router.post('/:id/pof', authorize('trade_group_owner','program_manager','intake_
   } catch (err) { next(err); }
 });
 
-// ─── VERIFY POF ───────────────────────────────────────────────────────────────
-router.patch('/:id/pof/:pof_id/verify', authorize('trade_group_owner','program_manager'), async (req, res, next) => {
-  try {
-    const { verification_notes } = req.body;
-    const result = await db.clients.query(
-      `UPDATE pcm_pof_records
-       SET verified = true, verified_at = NOW(),
-           verified_by = $1, verification_notes = $2
-       WHERE pof_id = $3 AND client_id = $4
-       RETURNING *`,
-      [req.user.sub || 'system', verification_notes, req.params.pof_id, req.params.id]
-    );
-    if (!result.rows.length) return res.status(404).json({ error: 'POF record not found' });
-    res.json(result.rows[0]);
-  } catch (err) { next(err); }
-});
-
 // ─── OFAC RESULTS ─────────────────────────────────────────────────────────────
 router.get('/:id/ofac', ownClient, async (req, res, next) => {
   try {
@@ -347,7 +335,7 @@ router.get('/:id/ofac', ownClient, async (req, res, next) => {
 // body, with no evidence it came from a real screen. Route kept (not
 // deleted) so a caller gets 410 Gone instead of a 404 that could pass for
 // a typo. See POST .../ofac/override for the real, dual-control path.
-router.post('/:id/ofac', authorize('trade_group_owner','program_manager','intake_officer'), (req, res) => {
+router.post('/:id/ofac', authorize('intake_officer'), (req, res) => {
   res.status(410).json({
     error:       'Gone',
     message:     'This endpoint no longer sets OFAC status from an unverified request body. Automated screening is recorded by the ofac-screening agent directly. For a manual/out-of-band screen, use the dual-control override flow.',
@@ -360,7 +348,7 @@ router.post('/:id/ofac', authorize('trade_group_owner','program_manager','intake
 // Does NOT set pcm_clients.ofac_status -- the KYC gate does not accept this
 // until a second, distinct principal confirms via the countersign endpoint
 // below. A single request naming two people is not dual control.
-router.post('/:id/ofac/override', authorize('trade_group_owner'), async (req, res, next) => {
+router.post('/:id/ofac/override', authorize('facilitator'), async (req, res, next) => {
   try {
     // CLOSE-GAP-26: structured fields, not just free-text reason. "Two
     // people clicked confirm" is not an audit trail for a sanctions
@@ -396,7 +384,7 @@ router.post('/:id/ofac/override', authorize('trade_group_owner'), async (req, re
     res.status(201).json({
       result_id:  result.rows[0].result_id,
       status:     'PENDING_COUNTERSIGN',
-      message:    'Override initiated. A different trade_group_owner must countersign before this affects the KYC gate.',
+      message:    'Override initiated. A different Facilitator must countersign before this affects the KYC gate.',
       initiated_by: initiatedBy
     });
   } catch (err) { next(err); }
@@ -409,7 +397,7 @@ router.post('/:id/ofac/override', authorize('trade_group_owner'), async (req, re
 // be overridden, so this uses its own provider/status/outcome vocabulary
 // rather than reusing MANUAL_OVERRIDE's, which would misrepresent the
 // audit trail as "every screen was an override."
-router.post('/:id/ofac/attest-out-of-band', authorize('trade_group_owner'), async (req, res, next) => {
+router.post('/:id/ofac/attest-out-of-band', authorize('facilitator'), async (req, res, next) => {
   try {
     const { reason, screening_provider, screening_date, reference_number } = req.body;
     if (!reason || !reason.trim()) {
@@ -442,7 +430,7 @@ router.post('/:id/ofac/attest-out-of-band', authorize('trade_group_owner'), asyn
     res.status(201).json({
       result_id:  result.rows[0].result_id,
       status:     'PENDING_ATTESTATION',
-      message:    'Attestation initiated. A different trade_group_owner must confirm before this affects the KYC gate.',
+      message:    'Attestation initiated. A different Facilitator must confirm before this affects the KYC gate.',
       initiated_by: initiatedBy
     });
   } catch (err) { next(err); }
@@ -451,7 +439,7 @@ router.post('/:id/ofac/attest-out-of-band', authorize('trade_group_owner'), asyn
 // ─── CONFIRM OFAC OUT-OF-BAND ATTESTATION (CLOSE-GAP-26, step 2 of 2) ────────
 // Only after this succeeds does pcm_clients.ofac_status become
 // 'attested_out_of_band'.
-router.patch('/:id/ofac/attest-out-of-band/:result_id/confirm', authorize('trade_group_owner'), async (req, res, next) => {
+router.patch('/:id/ofac/attest-out-of-band/:result_id/confirm', authorize('facilitator'), async (req, res, next) => {
   try {
     const { reason } = req.body;
     if (!reason || !reason.trim()) {
@@ -511,7 +499,7 @@ router.patch('/:id/ofac/attest-out-of-band/:result_id/confirm', authorize('trade
 // Only after this succeeds does pcm_clients.ofac_status become
 // 'manual_review' -- never 'clear'. Distinguishable from a real screen in
 // every downstream query, permanently.
-router.patch('/:id/ofac/override/:result_id/countersign', authorize('trade_group_owner'), async (req, res, next) => {
+router.patch('/:id/ofac/override/:result_id/countersign', authorize('facilitator'), async (req, res, next) => {
   try {
     const { reason } = req.body;
     if (!reason || !reason.trim()) {
@@ -566,8 +554,63 @@ router.patch('/:id/ofac/override/:result_id/countersign', authorize('trade_group
   } catch (err) { next(err); }
 });
 
+// ─── RECORD RULES ACKNOWLEDGMENT ──────────────────────────────────────────────
+// Clients have no login -- staff record that a client acknowledged, not
+// that a client clicked something. acknowledgment_method + method_reference
+// are required: a staff assertion alone isn't evidence of what it's based
+// on. rules_version is snapshotted from pcm_rules_content's CURRENT
+// version at the moment this is recorded, not caller-supplied -- the
+// point-in-time evidence must reflect what was actually current, not
+// whatever a request body happens to claim.
+const RULE_TYPES = ['kyc_instructions', 'pof_instructions', 'rules_of_the_road'];
+const ACK_METHODS = ['signed_document', 'email_confirmation', 'verbal', 'other'];
+
+router.post('/:id/rules-acknowledgment', authorize('intake_officer', 'program_manager'), async (req, res, next) => {
+  try {
+    const { rule_type, acknowledgment_method, method_reference } = req.body;
+    if (!RULE_TYPES.includes(rule_type)) {
+      return res.status(400).json({ error: `rule_type is required and must be one of: ${RULE_TYPES.join(', ')}` });
+    }
+    if (!ACK_METHODS.includes(acknowledgment_method)) {
+      return res.status(400).json({ error: `acknowledgment_method is required and must be one of: ${ACK_METHODS.join(', ')}` });
+    }
+
+    const client = await db.clients.query(
+      `SELECT client_id FROM pcm_clients WHERE client_id = $1 AND deleted_at IS NULL`, [req.params.id]
+    );
+    if (!client.rows.length) return res.status(404).json({ error: 'Client not found' });
+
+    const rule = await db.clients.query(
+      `SELECT version FROM pcm_rules_content WHERE rule_type = $1 AND active = true`, [rule_type]
+    );
+    if (!rule.rows.length) return res.status(404).json({ error: 'Rule content not found' });
+
+    const result = await db.clients.query(
+      `INSERT INTO pcm_rules_acknowledgments
+        (client_id, rule_type, rules_version, acknowledgment_method, method_reference, recorded_by)
+       VALUES ($1,$2,$3,$4,$5,$6)
+       RETURNING *`,
+      [req.params.id, rule_type, rule.rows[0].version, acknowledgment_method,
+       method_reference || null, req.user.sub || req.user.email]
+    );
+
+    res.status(201).json(result.rows[0]);
+  } catch (err) { next(err); }
+});
+
+// ─── GET RULES ACKNOWLEDGMENTS ────────────────────────────────────────────────
+router.get('/:id/rules-acknowledgments', ownClient, async (req, res, next) => {
+  try {
+    const result = await db.clients.query(
+      `SELECT * FROM pcm_rules_acknowledgments WHERE client_id = $1 ORDER BY recorded_at DESC`,
+      [req.params.id]
+    );
+    res.json({ acknowledgments: result.rows });
+  } catch (err) { next(err); }
+});
+
 // ─── SOFT DELETE CLIENT ───────────────────────────────────────────────────────
-router.delete('/:id', authorize('trade_group_owner'), async (req, res, next) => {
+router.delete('/:id', authorize('facilitator'), async (req, res, next) => {
   try {
     const result = await db.clients.query(
       `UPDATE pcm_clients SET deleted_at = NOW()

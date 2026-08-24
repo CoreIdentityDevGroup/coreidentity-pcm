@@ -1,0 +1,35 @@
+-- Phase B (2026-08-24): asset_type_id alongside the existing pcm_asset_type
+-- enum -- a dual-write transition, not a replacement. Run against the
+-- pcm_assets database. pcm_assets has zero rows -- purely additive, no
+-- backfill.
+--
+-- Why dual-write instead of replacing the enum: four read-only consumers
+-- reference the enum value directly today (Assets.jsx, Reporting.jsx,
+-- TransactionOwner.jsx, TradeGroup.jsx, all in coreg-unified-portal) --
+-- breaking them for a migration nobody needs yet is not worth it.
+--
+-- FLAGGED PRODUCT DECISION, not just a schema note: the enum and
+-- pcm_asset_types are NOT variants of the same list.
+--   pcm_asset_type enum (5 fixed values): real_estate, precious_metals,
+--     cash_wealth_account, sblc, skr -- financial instruments and
+--     structured holdings.
+--   pcm_asset_types table (6 admin-editable rows): Art, Gold, Jewelry,
+--     Real Estate, Historical Asset, Other -- physical collectibles.
+-- Only 'real_estate' / 'Real Estate' overlaps. These read as two
+-- different businesses' vocabularies sitting in the same system. NO
+-- MAPPING IS ATTEMPTED HERE OR IMPLIED BY THIS MIGRATION -- a content
+-- decision (which vocabulary wins, or whether both need to coexist
+-- permanently for different asset classes) is required before the enum
+-- can ever be retired. Until that decision is made, asset_type_id and
+-- asset_type are two independent fields that happen to sit on the same
+-- row, not two representations of the same fact.
+--
+-- NAMING COLLISION, flagged for whoever reads this next: the enum has a
+-- value literally named 'sblc'; pcm_securities_instruments (see 0021)
+-- has an entry named 'SBLC'. Same word, different field, different
+-- meaning -- an asset TYPE versus an instrument TYPE. Do not conflate
+-- them.
+--
+-- Plain uuid, NOT a foreign key -- pcm_asset_types lives in the
+-- pcm_clients database (same cross-database reasoning as 0020/0021).
+ALTER TABLE pcm_assets ADD COLUMN asset_type_id uuid;

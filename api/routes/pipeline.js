@@ -29,7 +29,7 @@ const ownAssetId = requireOwnClientOrStaff(async req => {
 // GET /api/v1/pipeline  — mounted with authenticate in app.js   /* fix-pipeline-summary */
 // Platform-wide, cross-client (recent transitions across every client) --
 // staff-only, same shape as /board and forms.js's monitoring/alerts.
-router.get('/', authorize('trade_group_owner','program_manager','intake_officer'), async (_req, res, next) => {
+router.get('/', authorize('facilitator','program_manager','intake_officer'), async (_req, res, next) => {
   try {
     const db = require('../services/db');
     const byStatus = await db.clients.query(
@@ -74,7 +74,18 @@ router.get('/status/:asset_id', ownAssetId, async (req, res, next) => {
 });
 
 // ─── ADVANCE PIPELINE STAGE ───────────────────────────────────────────────────
-router.post('/advance', authorize('trade_group_owner','program_manager','intake_officer'), async (req, res, next) => {
+// 2026-08-17 (Intake Officer scope, third revision): intake_officer
+// removed. "Collects the package and routes it to review. That is the
+// whole job... no advancing past intake" -- this is literally the
+// advance action. STAGES.kyc_verification.gate_roles below updated to
+// match (program_manager, not intake_officer) since this route-level
+// gate is the only live path to checkRoleAuthority's stage-specific
+// check for a human actor -- an intake_officer assigned as a package's
+// handler still can't reach it even via isAssignedHandler, since they
+// never pass this outer authorize() at all. Claiming a package
+// (POST /assets/:id/assign) stays with Intake Officer; moving the deal
+// forward to the next stage does not.
+router.post('/advance', authorize('facilitator','program_manager'), async (req, res, next) => {
   try {
     const { asset_id, client_id, to_stage, notes } = req.body;
 
@@ -121,7 +132,7 @@ router.post('/validate', ownAssetId, async (req, res, next) => {
 // ─── GET PIPELINE BOARD (all active assets by stage) ─────────────────────────
 // Cross-client by design (every active asset org-wide) -- staff-only. A
 // 'client' role has no legitimate use for the full trade pipeline board.
-router.get('/board', authorize('trade_group_owner','program_manager','intake_officer'), async (req, res, next) => {
+router.get('/board', authorize('facilitator','program_manager','intake_officer'), async (req, res, next) => {
   try {
     const db = require('../services/db');
     const result = await db.assets.query(
@@ -150,7 +161,7 @@ router.get('/board', authorize('trade_group_owner','program_manager','intake_off
 });
 
 // ─── REJECT ASSET ─────────────────────────────────────────────────────────────
-router.post('/reject', authorize('trade_group_owner'), async (req, res, next) => {
+router.post('/reject', authorize('facilitator'), async (req, res, next) => {
   try {
     const { asset_id, client_id, reason } = req.body;
     if (!asset_id || !client_id || !reason) {
@@ -169,7 +180,7 @@ router.post('/reject', authorize('trade_group_owner'), async (req, res, next) =>
 // ─── VERIFY INSTRUMENT INTEGRITY (human-review confirmation) ─────────────────
 // CLOSE-GAP-04: the ONLY path permitted to set instrument_integrity_status
 // to 'verified'. The instrument-integrity agent cannot self-clear this status.
-router.post('/verify-instrument', authorize('program_manager','trade_group_owner'), async (req, res, next) => {
+router.post('/verify-instrument', authorize('program_manager'), async (req, res, next) => {
   try {
     const { asset_id, client_id, decision, verification_channel_note } = req.body;
 
@@ -252,7 +263,7 @@ router.post('/verify-instrument', authorize('program_manager','trade_group_owner
 });
 
 // ─── HOLD ASSET ───────────────────────────────────────────────────────────────
-router.post('/hold', authorize('trade_group_owner','program_manager'), async (req, res, next) => {
+router.post('/hold', authorize('program_manager'), async (req, res, next) => {
   try {
     const { asset_id, client_id, notes } = req.body;
     if (!asset_id || !client_id) {
@@ -273,7 +284,7 @@ router.post('/hold', authorize('trade_group_owner','program_manager'), async (re
 // was on immediately before being held, reconstructed from
 // pcm_pipeline_history. advancePipeline()'s own isValidTransition() check
 // re-verifies this independently rather than trusting the lookup here.
-router.post('/resume', authorize('trade_group_owner','program_manager'), async (req, res, next) => {
+router.post('/resume', authorize('program_manager'), async (req, res, next) => {
   try {
     const { asset_id, client_id, notes } = req.body;
     if (!asset_id || !client_id) {

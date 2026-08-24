@@ -64,8 +64,6 @@ const leadsRouter        = require('./routes/leads');
 const agentsRouter       = require('./routes/agents');
 const activityRouter     = require('./routes/activity');
 const referenceRouter        = require('./routes/reference');
-const transactionsRouter     = require('./routes/transactions');
-const transactionStagesRouter = require('./routes/transaction-stages');
 const documentsRouter        = require('./routes/documents');
 const rulesRouter            = require('./routes/rules');
 const scheduledRouter    = require('./routes/scheduled'); // CLOSE-GAP-29: external-scheduler monitoring target
@@ -126,8 +124,6 @@ app.use('/api/v1/forms',    authenticate, formsRouter);
 app.use('/api/v1/pipeline', authenticate, pipelineRouter);
 // ─── PHASE 2: COREG PORTAL EXPANSION ──────────────────────────────────────────
 app.use('/api/v1/reference',     authenticate, referenceRouter);
-app.use('/api/v1/transactions',  authenticate, transactionsRouter);
-app.use('/api/v1/transactions',  authenticate, transactionStagesRouter); // /:txId/stages/:stageNumber
 app.use('/api/v1/documents',     authenticate, documentsRouter);
 app.use('/api/v1/rules',         authenticate, rulesRouter);
 // CLOSE-GAP-29 (Phase 3.6): no `authenticate` (JWT) here -- this is a

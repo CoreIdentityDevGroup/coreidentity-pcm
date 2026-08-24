@@ -2,9 +2,9 @@
 -- PostgreSQL database dump
 --
 
-\restrict WdMORGDnmyBNJDE6w3lgfbDfo9w2itr7ZE1CFzTA3QdLglZ2al4CEKSVTmNKrq6
+\restrict IS20fMffjVtkCeobITJ22VfnSPh8FWZM4syuwwlHMhXGKyOb2GHpY5pe8TzPzYl
 
--- Dumped from database version 15.17
+-- Dumped from database version 15.19
 -- Dumped by pg_dump version 16.14
 
 SET statement_timeout = 0;
@@ -73,7 +73,8 @@ CREATE TYPE public.pcm_user_role AS ENUM (
     'trade_group_owner',
     'program_manager',
     'intake_officer',
-    'system'
+    'system',
+    'facilitator'
 );
 
 
@@ -86,6 +87,28 @@ CREATE TYPE public.pcm_vault_status AS ENUM (
     'pending_deletion',
     'deleted'
 );
+
+
+--
+-- Name: enforce_one_year_retention(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.enforce_one_year_retention() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $_$
+DECLARE
+  age_column text := TG_ARGV[0];
+  record_created timestamptz;
+BEGIN
+  EXECUTE format('SELECT ($1).%I', age_column) INTO record_created USING OLD;
+  IF record_created > now() - interval '1 year' THEN
+    RAISE EXCEPTION 'Retention floor: % row is % old (created %), below the 1-year regulatory minimum -- deletion blocked',
+      TG_TABLE_NAME, age(now(), record_created), record_created
+      USING ERRCODE = '23514'; -- check_violation -- same class an app would get from a failed CHECK constraint
+  END IF;
+  RETURN OLD;
+END;
+$_$;
 
 
 --
@@ -282,7 +305,6 @@ CREATE TABLE public.pcm_deletion_certificates (
 CREATE TABLE public.pcm_documents (
     document_id uuid DEFAULT gen_random_uuid() NOT NULL,
     client_id uuid,
-    transaction_id uuid,
     document_type character varying(100),
     file_name character varying(500) NOT NULL,
     file_size_bytes integer,
@@ -472,6 +494,23 @@ CREATE TABLE public.pcm_referrers (
 
 
 --
+-- Name: pcm_rules_acknowledgments; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.pcm_rules_acknowledgments (
+    acknowledgment_id uuid DEFAULT gen_random_uuid() NOT NULL,
+    client_id uuid NOT NULL,
+    rule_type text NOT NULL,
+    rules_version integer NOT NULL,
+    acknowledgment_method text NOT NULL,
+    method_reference text,
+    recorded_by text NOT NULL,
+    recorded_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT pcm_rules_acknowledgments_acknowledgment_method_check CHECK ((acknowledgment_method = ANY (ARRAY['signed_document'::text, 'email_confirmation'::text, 'verbal'::text, 'other'::text])))
+);
+
+
+--
 -- Name: pcm_rules_content; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -607,56 +646,7 @@ CREATE TABLE public.pcm_staff (
     last_login timestamp with time zone,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT pcm_staff_role_check CHECK ((role = ANY (ARRAY['trade_group_owner'::text, 'program_manager'::text, 'intake_officer'::text])))
-);
-
-
---
--- Name: pcm_transaction_stages; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.pcm_transaction_stages (
-    stage_id uuid DEFAULT gen_random_uuid() NOT NULL,
-    transaction_id uuid NOT NULL,
-    stage_number integer NOT NULL,
-    status character varying(50) DEFAULT 'pending'::character varying,
-    notes text,
-    completed_at timestamp with time zone,
-    created_at timestamp with time zone DEFAULT now(),
-    updated_at timestamp with time zone DEFAULT now(),
-    CONSTRAINT pcm_transaction_stages_stage_number_check CHECK (((stage_number >= 1) AND (stage_number <= 8))),
-    CONSTRAINT pcm_transaction_stages_status_check CHECK (((status)::text = ANY (ARRAY[('pending'::character varying)::text, ('in_progress'::character varying)::text, ('completed'::character varying)::text, ('skipped'::character varying)::text, ('not_applicable'::character varying)::text])))
-);
-
-
---
--- Name: pcm_transactions; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.pcm_transactions (
-    transaction_id uuid DEFAULT gen_random_uuid() NOT NULL,
-    client_id uuid NOT NULL,
-    transaction_type character varying(50) NOT NULL,
-    crypto_wallet_address text,
-    crypto_wallet_link text,
-    asset_type_id uuid,
-    asset_description text,
-    asset_backing_id uuid,
-    instrument_id uuid,
-    instrument_description text,
-    bank_id uuid,
-    asset_jurisdiction text,
-    asset_location text,
-    owner_name text,
-    beneficiary_same_as_owner boolean DEFAULT true,
-    beneficiary_name text,
-    been_in_trade_before boolean DEFAULT false,
-    rules_acknowledged boolean DEFAULT false,
-    rules_acknowledged_at timestamp with time zone,
-    status character varying(50) DEFAULT 'active'::character varying,
-    created_at timestamp with time zone DEFAULT now(),
-    updated_at timestamp with time zone DEFAULT now(),
-    CONSTRAINT pcm_transactions_transaction_type_check CHECK (((transaction_type)::text = ANY (ARRAY[('crypto'::character varying)::text, ('cash'::character varying)::text, ('asset'::character varying)::text])))
+    CONSTRAINT pcm_staff_role_check CHECK ((role = ANY (ARRAY['facilitator'::text, 'program_manager'::text, 'intake_officer'::text])))
 );
 
 
@@ -876,6 +866,14 @@ ALTER TABLE ONLY public.pcm_referrers
 
 
 --
+-- Name: pcm_rules_acknowledgments pcm_rules_acknowledgments_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.pcm_rules_acknowledgments
+    ADD CONSTRAINT pcm_rules_acknowledgments_pkey PRIMARY KEY (acknowledgment_id);
+
+
+--
 -- Name: pcm_rules_content pcm_rules_content_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -953,30 +951,6 @@ ALTER TABLE ONLY public.pcm_staff
 
 ALTER TABLE ONLY public.pcm_staff
     ADD CONSTRAINT pcm_staff_pkey PRIMARY KEY (staff_id);
-
-
---
--- Name: pcm_transaction_stages pcm_transaction_stages_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pcm_transaction_stages
-    ADD CONSTRAINT pcm_transaction_stages_pkey PRIMARY KEY (stage_id);
-
-
---
--- Name: pcm_transaction_stages pcm_transaction_stages_transaction_id_stage_number_key; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pcm_transaction_stages
-    ADD CONSTRAINT pcm_transaction_stages_transaction_id_stage_number_key UNIQUE (transaction_id, stage_number);
-
-
---
--- Name: pcm_transactions pcm_transactions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pcm_transactions
-    ADD CONSTRAINT pcm_transactions_pkey PRIMARY KEY (transaction_id);
 
 
 --
@@ -1078,13 +1052,6 @@ CREATE INDEX idx_pcm_documents_client ON public.pcm_documents USING btree (clien
 
 
 --
--- Name: idx_pcm_documents_transaction; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_pcm_documents_transaction ON public.pcm_documents USING btree (transaction_id);
-
-
---
 -- Name: idx_pcm_kyc_client; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -1159,6 +1126,13 @@ CREATE INDEX idx_pcm_pof_client ON public.pcm_pof_records USING btree (client_id
 --
 
 CREATE INDEX idx_pcm_referrers_type ON public.pcm_referrers USING btree (referral_type) WHERE (active = true);
+
+
+--
+-- Name: idx_pcm_rules_acknowledgments_client; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_pcm_rules_acknowledgments_client ON public.pcm_rules_acknowledgments USING btree (client_id);
 
 
 --
@@ -1239,24 +1213,38 @@ CREATE INDEX idx_pcm_staff_email ON public.pcm_staff USING btree (email) WHERE (
 
 
 --
--- Name: idx_pcm_transaction_stages_transaction; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_pcm_transaction_stages_transaction ON public.pcm_transaction_stages USING btree (transaction_id);
-
-
---
--- Name: idx_pcm_transactions_client; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_pcm_transactions_client ON public.pcm_transactions USING btree (client_id);
-
-
---
 -- Name: pcm_clients trg_pcm_clients_updated_at; Type: TRIGGER; Schema: public; Owner: -
 --
 
 CREATE TRIGGER trg_pcm_clients_updated_at BEFORE UPDATE ON public.pcm_clients FOR EACH ROW EXECUTE FUNCTION public.pcm_set_updated_at();
+
+
+--
+-- Name: pcm_clients trg_retention_floor_pcm_clients; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER trg_retention_floor_pcm_clients BEFORE DELETE ON public.pcm_clients FOR EACH ROW EXECUTE FUNCTION public.enforce_one_year_retention('created_at');
+
+
+--
+-- Name: pcm_kyc_documents trg_retention_floor_pcm_kyc_documents; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER trg_retention_floor_pcm_kyc_documents BEFORE DELETE ON public.pcm_kyc_documents FOR EACH ROW EXECUTE FUNCTION public.enforce_one_year_retention('created_at');
+
+
+--
+-- Name: pcm_ofac_results trg_retention_floor_pcm_ofac_results; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER trg_retention_floor_pcm_ofac_results BEFORE DELETE ON public.pcm_ofac_results FOR EACH ROW EXECUTE FUNCTION public.enforce_one_year_retention('created_at');
+
+
+--
+-- Name: pcm_pof_records trg_retention_floor_pcm_pof_records; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER trg_retention_floor_pcm_pof_records BEFORE DELETE ON public.pcm_pof_records FOR EACH ROW EXECUTE FUNCTION public.enforce_one_year_retention('created_at');
 
 
 --
@@ -1305,14 +1293,6 @@ ALTER TABLE ONLY public.pcm_deletion_certificates
 
 ALTER TABLE ONLY public.pcm_documents
     ADD CONSTRAINT pcm_documents_client_id_fkey FOREIGN KEY (client_id) REFERENCES public.pcm_clients(client_id);
-
-
---
--- Name: pcm_documents pcm_documents_transaction_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pcm_documents
-    ADD CONSTRAINT pcm_documents_transaction_id_fkey FOREIGN KEY (transaction_id) REFERENCES public.pcm_transactions(transaction_id);
 
 
 --
@@ -1380,6 +1360,22 @@ ALTER TABLE ONLY public.pcm_referral_commissions
 
 
 --
+-- Name: pcm_rules_acknowledgments pcm_rules_acknowledgments_client_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.pcm_rules_acknowledgments
+    ADD CONSTRAINT pcm_rules_acknowledgments_client_id_fkey FOREIGN KEY (client_id) REFERENCES public.pcm_clients(client_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: pcm_rules_acknowledgments pcm_rules_acknowledgments_rule_type_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.pcm_rules_acknowledgments
+    ADD CONSTRAINT pcm_rules_acknowledgments_rule_type_fkey FOREIGN KEY (rule_type) REFERENCES public.pcm_rules_content(rule_type);
+
+
+--
 -- Name: pcm_sdn_aliases pcm_sdn_aliases_entry_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1404,56 +1400,8 @@ ALTER TABLE ONLY public.pcm_sdn_entries
 
 
 --
--- Name: pcm_transaction_stages pcm_transaction_stages_transaction_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pcm_transaction_stages
-    ADD CONSTRAINT pcm_transaction_stages_transaction_id_fkey FOREIGN KEY (transaction_id) REFERENCES public.pcm_transactions(transaction_id);
-
-
---
--- Name: pcm_transactions pcm_transactions_asset_backing_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pcm_transactions
-    ADD CONSTRAINT pcm_transactions_asset_backing_id_fkey FOREIGN KEY (asset_backing_id) REFERENCES public.pcm_asset_backings(backing_id);
-
-
---
--- Name: pcm_transactions pcm_transactions_asset_type_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pcm_transactions
-    ADD CONSTRAINT pcm_transactions_asset_type_id_fkey FOREIGN KEY (asset_type_id) REFERENCES public.pcm_asset_types(asset_type_id);
-
-
---
--- Name: pcm_transactions pcm_transactions_bank_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pcm_transactions
-    ADD CONSTRAINT pcm_transactions_bank_id_fkey FOREIGN KEY (bank_id) REFERENCES public.pcm_banks(bank_id);
-
-
---
--- Name: pcm_transactions pcm_transactions_client_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pcm_transactions
-    ADD CONSTRAINT pcm_transactions_client_id_fkey FOREIGN KEY (client_id) REFERENCES public.pcm_clients(client_id);
-
-
---
--- Name: pcm_transactions pcm_transactions_instrument_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pcm_transactions
-    ADD CONSTRAINT pcm_transactions_instrument_id_fkey FOREIGN KEY (instrument_id) REFERENCES public.pcm_securities_instruments(instrument_id);
-
-
---
 -- PostgreSQL database dump complete
 --
 
-\unrestrict WdMORGDnmyBNJDE6w3lgfbDfo9w2itr7ZE1CFzTA3QdLglZ2al4CEKSVTmNKrq6
+\unrestrict IS20fMffjVtkCeobITJ22VfnSPh8FWZM4syuwwlHMhXGKyOb2GHpY5pe8TzPzYl
 

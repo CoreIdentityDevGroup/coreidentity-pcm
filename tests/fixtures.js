@@ -46,12 +46,14 @@ async function addKycDocument(client_id) {
 }
 
 async function addPofRecord(client_id) {
-  await db.clients.query(
+  const result = await db.clients.query(
     `INSERT INTO pcm_pof_records
        (client_id, declared_amount, issuing_bank, gcs_bucket, gcs_object_path, submission_date)
-     VALUES ($1, 5000000, 'Test Bank', 'test-bucket', $2, CURRENT_DATE)`,
+     VALUES ($1, 5000000, 'Test Bank', 'test-bucket', $2, CURRENT_DATE)
+     RETURNING pof_id`,
     [client_id, `pof/${client_id}/${Date.now()}.pdf`]
   );
+  return result.rows[0].pof_id;
 }
 
 // Replicates exactly what POST .../ofac/attest-out-of-band/:id/confirm
@@ -73,6 +75,40 @@ async function confirmOfacAttestation(client_id) {
      WHERE client_id = $2`,
     [result.rows[0].result_id, client_id]
   );
+}
+
+// Replicates exactly what POST .../platform-submission produces
+// (2026-08-24, replaces the removed legal-attestation fixture) -- a bare
+// submission row, no response yet. Manifest content doesn't matter for
+// gate tests, so a minimal fixture object stands in for the real
+// snapshot buildSubmissionManifest() would produce.
+async function createPlatformSubmission(asset_id, overrides = {}) {
+  const result = await db.assets.query(
+    `INSERT INTO pcm_platform_submissions (asset_id, submitted_by, manifest)
+     VALUES ($1, $2, $3) RETURNING submission_id`,
+    [asset_id, overrides.submitted_by || 'fixture-principal-1', JSON.stringify(overrides.manifest || { fixture: true })]
+  );
+  return result.rows[0].submission_id;
+}
+
+// Records a platform response directly, for tests that need a
+// submission with no response yet vs. one with a recorded decision.
+async function recordPlatformResponse(submission_id, decision = 'APPROVED', overrides = {}) {
+  const result = await db.assets.query(
+    `INSERT INTO pcm_platform_responses (submission_id, decision, recorded_by)
+     VALUES ($1, $2, $3) RETURNING response_id`,
+    [submission_id, decision, overrides.recorded_by || 'fixture-principal-2']
+  );
+  return result.rows[0].response_id;
+}
+
+// Convenience: submission + APPROVED response in one call, for tests
+// that just need the tokenization gate's platform-approval check
+// satisfied and don't care about the two-step shape.
+async function confirmPlatformApproval(asset_id, overrides = {}) {
+  const submissionId = await createPlatformSubmission(asset_id, overrides);
+  await recordPlatformResponse(submissionId, overrides.decision || 'APPROVED', overrides);
+  return submissionId;
 }
 
 async function addValuation(asset_id, overrides = {}) {
@@ -111,6 +147,15 @@ async function setBankAssignment(asset_id, bank = 'Test Bank NA') {
     `UPDATE pcm_assets SET bank_assignment = $1, bank_assignment_date = NOW() WHERE asset_id = $2`,
     [bank, asset_id]
   );
+}
+
+async function createRefBank(overrides = {}) {
+  const name = overrides.name || `Test Bank ${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+  const result = await db.clients.query(
+    `INSERT INTO pcm_banks (name, active) VALUES ($1, $2) RETURNING bank_id, name, active`,
+    [name, overrides.active !== undefined ? overrides.active : true]
+  );
+  return result.rows[0];
 }
 
 async function addExecutedAgreement(asset_id, client_id, pipeline_reference, agreement_type) {
@@ -159,6 +204,7 @@ async function createStaff(overrides = {}) {
 
 module.exports = {
   createClient, createAsset, addKycDocument, addPofRecord, confirmOfacAttestation,
-  addValuation, addAssetDocument, setInstrumentIntegrityVerified, setBankAssignment,
-  addExecutedAgreement, mintClassificationToken, createStaff
+  createPlatformSubmission, recordPlatformResponse, confirmPlatformApproval,
+  addValuation, addAssetDocument, setInstrumentIntegrityVerified,
+  setBankAssignment, createRefBank, addExecutedAgreement, mintClassificationToken, createStaff
 };

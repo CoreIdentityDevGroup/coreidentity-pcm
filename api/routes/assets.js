@@ -2,13 +2,14 @@
 
 const express  = require('express');
 const db       = require('../services/db');
-const { authorize } = require('../middleware/authorize');
+const { authorize, normalizeRole } = require('../middleware/authorize');
 const { requireOwnClientOrStaff } = require('../middleware/ownership');
 const router   = express.Router();
 
 // Client-linked GET routes below take asset_id from the path and look up its
-// owning client_id. Matches the ownership check already established in
-// transactions.js's acknowledge-rules route.
+// owning client_id, so a client-role token scoped to a different client_id
+// gets 403'd by requireOwnClientOrStaff rather than reading another
+// client's asset.
 const ownAsset = requireOwnClientOrStaff(async req => {
   const r = await db.assets.query(
     `SELECT client_id FROM pcm_assets WHERE asset_id = $1 AND deleted_at IS NULL`,
@@ -22,8 +23,7 @@ router.get('/', async (req, res, next) => {
   try {
     const { asset_type, pipeline_stage, limit = 50, offset = 0 } = req.query;
     // Client-role tokens are always scoped to their own client_id, regardless
-    // of any client_id passed in the query string -- same fix as
-    // transactions.js's LIST route.
+    // of any client_id passed in the query string.
     const client_id = req.user?.role === 'client' ? req.user.client_id : req.query.client_id;
     let query = `SELECT * FROM pcm_assets WHERE deleted_at IS NULL`;
     const params = [];
@@ -53,25 +53,55 @@ router.get('/:id', ownAsset, async (req, res, next) => {
 });
 
 // ─── CREATE ASSET ─────────────────────────────────────────────────────────────
-router.post('/', authorize('trade_group_owner','program_manager','intake_officer'), async (req, res, next) => {
+// asset_type (enum) and asset_type_id (FK toward pcm_asset_types,
+// migration 0022) are a dual-write pair with NO mapping between them
+// (see 0022's header) -- both optional now (migration 0025 dropped the
+// enum's NOT NULL), neither forced. Not requiring at least one, on
+// purpose: a crypto or cash transaction_type genuinely has no asset
+// type in either vocabulary -- forcing a value here would mean
+// inventing one.
+// asset_backing_id/instrument_id/asset_type_id are all cross-database
+// plain uuids (pcm_asset_backings/pcm_securities_instruments/
+// pcm_asset_types live in pcm_clients, pcm_assets lives in pcm_assets)
+// and are validated for existence here the same way bank_id is
+// validated in the bank-assignment route below.
+router.post('/', authorize('program_manager'), async (req, res, next) => {
   try {
-    const { client_id, asset_type, asset_subtype, description,
-            location, declared_value, currency, notes } = req.body;
+    const { client_id, asset_type, asset_type_id, asset_subtype, description,
+            location, declared_value, currency, notes,
+            asset_backing_id, instrument_id, instrument_description, transaction_type } = req.body;
 
-    if (!client_id || !asset_type) {
-      return res.status(400).json({ error: 'client_id and asset_type are required' });
+    if (!client_id) {
+      return res.status(400).json({ error: 'client_id is required' });
+    }
+
+    for (const [field, table, pk] of [
+      [asset_type_id, 'pcm_asset_types', 'asset_type_id'],
+      [asset_backing_id, 'pcm_asset_backings', 'backing_id'],
+      [instrument_id, 'pcm_securities_instruments', 'instrument_id']
+    ]) {
+      if (field) {
+        const refCheck = await db.clients.query(
+          `SELECT 1 FROM ${table} WHERE ${pk} = $1 AND active = true`, [field]
+        );
+        if (!refCheck.rows.length) {
+          return res.status(400).json({ error: `${pk} does not match an active row in ${table}` });
+        }
+      }
     }
 
     const ref = `PCM-${Date.now()}-${Math.random().toString(36).substr(2,6).toUpperCase()}`;
 
     const result = await db.assets.query(
       `INSERT INTO pcm_assets
-        (client_id, asset_type, asset_subtype, description,
-         location, declared_value, currency, pipeline_reference, notes)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+        (client_id, asset_type, asset_type_id, asset_subtype, description,
+         location, declared_value, currency, pipeline_reference, notes,
+         asset_backing_id, instrument_id, instrument_description, transaction_type)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
        RETURNING *`,
-      [client_id, asset_type, asset_subtype, description,
-       location, declared_value, currency || 'USD', ref, notes]
+      [client_id, asset_type || null, asset_type_id || null, asset_subtype, description,
+       location, declared_value, currency || 'USD', ref, notes,
+       asset_backing_id || null, instrument_id || null, instrument_description || null, transaction_type || null]
     );
 
     await db.assets.query(
@@ -127,7 +157,7 @@ router.post('/', authorize('trade_group_owner','program_manager','intake_officer
 });
 
 // ─── UPDATE ASSET ─────────────────────────────────────────────────────────────
-router.patch('/:id', authorize('trade_group_owner','program_manager','intake_officer'), async (req, res, next) => {
+router.patch('/:id', authorize('program_manager'), async (req, res, next) => {
   try {
     const allowed = ['asset_subtype','description','location','declared_value',
                      'currency','bank_assignment','bank_swift_code','notes'];
@@ -161,7 +191,7 @@ router.patch('/:id', authorize('trade_group_owner','program_manager','intake_off
 // call — a second, unguarded path to the same transition that
 // POST /api/v1/pipeline/advance already gates. Route kept (not deleted) so
 // a caller gets 410 Gone instead of a 404 that could pass for a typo.
-router.post('/:id/advance', authorize('trade_group_owner','program_manager','intake_officer'), (req, res) => {
+router.post('/:id/advance', authorize('program_manager'), (req, res) => {
   res.status(410).json({
     error:       'Gone',
     message:     'This endpoint no longer advances pipeline stage. It performed no role-authority, gate, or Sentinel checks. Use POST /api/v1/pipeline/advance instead.',
@@ -237,7 +267,7 @@ router.get('/:id/valuations', ownAsset, async (req, res, next) => {
 });
 
 // ─── SUBMIT VALUATION (with same-date enforcement) ────────────────────────────
-router.post('/:id/valuations', authorize('trade_group_owner','program_manager','intake_officer'), async (req, res, next) => {
+router.post('/:id/valuations', authorize('program_manager'), async (req, res, next) => {
   try {
     const { appraised_value, currency, appraiser_name, appraiser_organization,
             appraiser_license, appraisal_date, submission_date,
@@ -343,7 +373,7 @@ router.get('/:id/documents', ownAsset, async (req, res, next) => {
 });
 
 // ─── REGISTER SUPPORTING DOCUMENT ────────────────────────────────────────────
-router.post('/:id/documents', authorize('trade_group_owner','program_manager','intake_officer'), async (req, res, next) => {
+router.post('/:id/documents', authorize('program_manager'), async (req, res, next) => {
   try {
     const { doc_type, doc_subtype, file_name, file_size_bytes,
             content_type, submission_date, gcs_bucket, gcs_object_path } = req.body;
@@ -383,13 +413,27 @@ router.get('/:id/token', ownAsset, async (req, res, next) => {
 });
 
 // ─── ASSIGN TRADER BANK ───────────────────────────────────────────────────────
-router.post('/:id/bank-assignment', authorize('trade_group_owner','program_manager'), async (req, res, next) => {
+// Phase B (2026-08-24): bank_id is optional, additive alongside the
+// existing free-text fields (see db/migrations/0023's header for why
+// those aren't replaced). Validated against pcm_banks when provided --
+// pcm_banks lives in the pcm_clients database (cross-database, no real
+// FK possible), so this is the one place that check can happen.
+router.post('/:id/bank-assignment', authorize('program_manager'), async (req, res, next) => {
   try {
-    const { bank_name, bank_jurisdiction, bank_swift_code,
+    const { bank_id, bank_name, bank_jurisdiction, bank_swift_code,
             assignment_basis, notes } = req.body;
 
     if (!bank_name || !bank_jurisdiction) {
       return res.status(400).json({ error: 'bank_name and bank_jurisdiction are required' });
+    }
+
+    if (bank_id) {
+      const bank = await db.clients.query(
+        `SELECT bank_id FROM pcm_banks WHERE bank_id = $1 AND active = true`, [bank_id]
+      );
+      if (!bank.rows.length) {
+        return res.status(400).json({ error: 'bank_id does not match an active bank in the reference list' });
+      }
     }
 
     const asset = await db.assets.query(
@@ -405,11 +449,11 @@ router.post('/:id/bank-assignment', authorize('trade_group_owner','program_manag
 
     const result = await db.assets.query(
       `INSERT INTO pcm_bank_assignments
-        (asset_id, client_id, bank_name, bank_jurisdiction,
+        (asset_id, client_id, bank_id, bank_name, bank_jurisdiction,
          bank_swift_code, assignment_basis, assigned_by, notes)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
        RETURNING *`,
-      [req.params.id, asset.rows[0].client_id, bank_name, bank_jurisdiction,
+      [req.params.id, asset.rows[0].client_id, bank_id || null, bank_name, bank_jurisdiction,
        bank_swift_code, assignment_basis, req.user.sub || 'system', notes]
     );
 
@@ -426,6 +470,189 @@ router.get('/:id/bank-assignments', ownAsset, async (req, res, next) => {
       [req.params.id]
     );
     res.json({ bank_assignments: result.rows });
+  } catch (err) { next(err); }
+});
+
+// ─── ASSIGN PACKAGE HANDLER ───────────────────────────────────────────────────
+// 2026-08-24 (replaces legal-attestation entry, removed this session --
+// CoreG reviews its own documentation, there is no external counsel step
+// to piggyback the assignment on anymore). Standalone: claims ownership
+// of a package, nothing else. Self-referential by design, same
+// constraint the old entry route had -- assigned_role/assigned_staff_id
+// come from req.user, NEVER the request body, so a caller cannot claim
+// an assignment on someone else's behalf.
+//
+// Facilitator can self-assign too (superset rule, unchanged from the old
+// route) -- assigned_handler_role's CHECK still allows 'facilitator'
+// (db/migrations/0013). The stored role is descriptive only; ownership
+// authority is decided by staff_id match in checkRoleAuthority, not this
+// value.
+router.post('/:id/assign', authorize('intake_officer', 'program_manager'), async (req, res, next) => {
+  try {
+    const asset = await db.assets.query(
+      `SELECT asset_id FROM pcm_assets WHERE asset_id = $1 AND deleted_at IS NULL`,
+      [req.params.id]
+    );
+    if (!asset.rows.length) return res.status(404).json({ error: 'Asset not found' });
+
+    const assignedRole = normalizeRole(req.user.role);
+    const staffId = req.user.staff_id;
+
+    const result = await db.assets.query(
+      `UPDATE pcm_assets SET assigned_handler_role = $1, assigned_handler_staff_id = $2
+       WHERE asset_id = $3 RETURNING asset_id, assigned_handler_role, assigned_handler_staff_id`,
+      [assignedRole, staffId, req.params.id]
+    );
+
+    res.json(result.rows[0]);
+  } catch (err) { next(err); }
+});
+
+// ─── SUBMIT PACKAGE TO PLATFORM ───────────────────────────────────────────────
+// 2026-08-24. CoreG is an intermediary that collects and reviews
+// documentation itself (stages 1-7). Once securitization (stage 7)
+// completes, the package goes to the platform -- an external party with
+// no portal login -- for its own review; tokenization (stage 8) only
+// proceeds on the platform's approval (see GATE_REQUIREMENTS.tokenization
+// in api/services/pipeline.js). This route records that the package was
+// sent, for accountability, same discipline pcm_ofac_results already
+// applies to CoreG's own screening: structured fields, a recorded
+// principal, a recorded timestamp.
+//
+// manifest is a point-in-time SNAPSHOT of what's actually being sent, not
+// a set of references to resolve later -- buildSubmissionManifest reads
+// the real field values off every evidence table at submission time, so
+// if a document or valuation changes or gets superseded afterward, this
+// row still shows what the platform actually received.
+async function buildSubmissionManifest(asset_id, client_id) {
+  const [asset, valuations, assetDocuments, integrity, agreements, kycDocs, pofRecords, ofac] = await Promise.all([
+    db.assets.query(`SELECT * FROM pcm_assets WHERE asset_id = $1`, [asset_id]),
+    db.assets.query(`SELECT * FROM pcm_valuations WHERE asset_id = $1 ORDER BY created_at DESC`, [asset_id]),
+    db.assets.query(`SELECT doc_id, doc_type, doc_subtype, file_name, submission_date, uploaded_at, uploaded_by
+                      FROM pcm_asset_documents WHERE asset_id = $1 AND vault_status = 'active'`, [asset_id]),
+    db.assets.query(`SELECT * FROM pcm_instrument_integrity_results WHERE asset_id = $1`, [asset_id]),
+    db.forms.query(`SELECT agreement_id, agreement_type, status, effective_date, execution_date, file_name
+                     FROM pcm_agreements WHERE asset_id = $1 AND status = 'fully_executed'`, [asset_id]),
+    db.clients.query(`SELECT doc_id, doc_type, doc_subtype, file_name, submission_date, uploaded_at, uploaded_by
+                       FROM pcm_kyc_documents WHERE client_id = $1 AND vault_status = 'active'`, [client_id]),
+    db.clients.query(`SELECT pof_id, declared_amount, currency, issuing_bank, submission_date, verified
+                       FROM pcm_pof_records WHERE client_id = $1 AND vault_status = 'active'`, [client_id]),
+    db.clients.query(`SELECT result_id, provider, status, match_method, screened_at
+                       FROM pcm_ofac_results WHERE client_id = $1 ORDER BY screened_at DESC LIMIT 1`, [client_id])
+  ]);
+
+  return {
+    asset:               asset.rows[0] || null,
+    valuations:          valuations.rows,
+    asset_documents:     assetDocuments.rows,
+    instrument_integrity: integrity.rows,
+    agreements:          agreements.rows,
+    kyc_documents:       kycDocs.rows,
+    pof_records:         pofRecords.rows,
+    ofac_result:         ofac.rows[0] || null
+  };
+}
+
+router.post('/:id/platform-submission', authorize('program_manager'), async (req, res, next) => {
+  try {
+    const asset = await db.assets.query(
+      `SELECT asset_id, client_id, pipeline_stage FROM pcm_assets WHERE asset_id = $1 AND deleted_at IS NULL`,
+      [req.params.id]
+    );
+    if (!asset.rows.length) return res.status(404).json({ error: 'Asset not found' });
+    const { client_id, pipeline_stage } = asset.rows[0];
+
+    if (pipeline_stage !== 'securitization') {
+      return res.status(409).json({ error: `Asset must be at 'securitization' to submit to the platform (current stage: ${pipeline_stage})` });
+    }
+
+    const manifest = await buildSubmissionManifest(req.params.id, client_id);
+    const submittedBy = req.user.sub || req.user.email;
+
+    const result = await db.assets.query(
+      `INSERT INTO pcm_platform_submissions (asset_id, submitted_by, manifest)
+       VALUES ($1,$2,$3) RETURNING submission_id, asset_id, submitted_by, submitted_at`,
+      [req.params.id, submittedBy, JSON.stringify(manifest)]
+    );
+
+    res.status(201).json(result.rows[0]);
+  } catch (err) { next(err); }
+});
+
+router.get('/:id/platform-submissions', ownAsset, async (req, res, next) => {
+  try {
+    const result = await db.assets.query(
+      `SELECT submission_id, asset_id, submitted_by, submitted_at
+       FROM pcm_platform_submissions WHERE asset_id = $1 ORDER BY submitted_at DESC`,
+      [req.params.id]
+    );
+    res.json({ submissions: result.rows });
+  } catch (err) { next(err); }
+});
+
+// ─── RECORD PLATFORM RESPONSE ─────────────────────────────────────────────────
+// APPROVED or DENIED, no conditions -- same binary-no-default discipline
+// the removed legal-attestation outcome used. No countersign: the
+// platform itself is the second party to this decision, so a single
+// CoreG principal recording what the platform said is not the same kind
+// of claim an out-of-band attestation was.
+//
+// DENIED archives the package by moving it to 'rejected' -- reusing the
+// existing terminal stage rather than inventing a distinct "archived"
+// state (see this session's design note: 'rejected' is already
+// unconditionally terminal, already audit-logged via
+// pcm_pipeline_history, and the reason a package died is already fully
+// captured in pcm_platform_responses + the transition notes below, same
+// pattern the removed legal-attestation-denial auto-reject used).
+router.post('/:id/platform-submission/:submission_id/response', authorize('program_manager'), async (req, res, next) => {
+  try {
+    const { decision } = req.body;
+    if (decision !== 'APPROVED' && decision !== 'DENIED') {
+      return res.status(400).json({ error: "decision is required and must be 'APPROVED' or 'DENIED'" });
+    }
+
+    const submission = await db.assets.query(
+      `SELECT submission_id, asset_id FROM pcm_platform_submissions
+       WHERE submission_id = $1 AND asset_id = $2`,
+      [req.params.submission_id, req.params.id]
+    );
+    if (!submission.rows.length) return res.status(404).json({ error: 'Submission not found' });
+
+    const existingResponse = await db.assets.query(
+      `SELECT response_id FROM pcm_platform_responses WHERE submission_id = $1`,
+      [req.params.submission_id]
+    );
+    if (existingResponse.rows.length) {
+      return res.status(409).json({ error: 'This submission already has a recorded response.' });
+    }
+
+    const recordedBy = req.user.sub || req.user.email;
+    const result = await db.assets.query(
+      `INSERT INTO pcm_platform_responses (submission_id, decision, recorded_by)
+       VALUES ($1,$2,$3) RETURNING *`,
+      [req.params.submission_id, decision, recordedBy]
+    );
+
+    let rejection = null;
+    if (decision === 'DENIED') {
+      const asset = await db.assets.query(`SELECT client_id FROM pcm_assets WHERE asset_id = $1`, [req.params.id]);
+      const { advancePipeline } = require('../services/pipeline');
+      rejection = await advancePipeline({
+        asset_id: req.params.id,
+        client_id: asset.rows[0].client_id,
+        to_stage: 'rejected',
+        user: { sub: req.user.sub, staff_id: req.user.staff_id, role: 'facilitator' },
+        notes: `Automatic: platform denied submission ${req.params.submission_id} (recorded by ${recordedBy})`
+      });
+      if (!rejection.success) {
+        console.error(JSON.stringify({
+          level: 'error', message: 'Platform denial recorded but automatic rejection failed',
+          submission_id: req.params.submission_id, asset_id: req.params.id, error: rejection.error
+        }));
+      }
+    }
+
+    res.status(201).json({ ...result.rows[0], auto_rejected: decision === 'DENIED', rejection_result: rejection });
   } catch (err) { next(err); }
 });
 

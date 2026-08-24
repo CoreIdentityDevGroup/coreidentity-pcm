@@ -1,0 +1,29 @@
+-- Phase C, judgment call flagged for review: pcm_assets.asset_type
+-- (the 5-value enum) becomes nullable. Run against the pcm_assets
+-- database.
+--
+-- WHY: the wizard being repointed at POST /assets in this same commit
+-- (TransactionRegistration.jsx) sources its "Asset Type" step from
+-- pcm_asset_types (Art, Gold, Jewelry, Real Estate, Historical Asset,
+-- Other) -- the admin-editable table asset_type_id (migration 0022)
+-- points at. Migration 0022's own header is explicit that the enum and
+-- pcm_asset_types are materially divergent vocabularies with NO MAPPING
+-- ATTEMPTED OR PERMITTED between them pending a content decision. That
+-- leaves no honest value to write into the NOT NULL enum column for an
+-- asset created through this wizard -- inventing a fallback (e.g.
+-- always writing 'real_estate' regardless of what was actually
+-- selected) would be fabricated data, worse than a null column.
+--
+-- So: asset_type stays exactly as useful as it already is for existing
+-- readers (Assets.jsx, Reporting.jsx, TransactionOwner.jsx,
+-- TradeGroup.jsx all still read it, unchanged) and for any caller that
+-- still supplies it, but is no longer force-required on every insert.
+-- POST /assets (api/routes/assets.js, same commit) now requires
+-- client_id and at least one of (asset_type, asset_type_id), not both.
+-- Precedent for "nullable, not forced": the retired pcm_transactions
+-- table's asset_type_id column was already nullable for exactly this
+-- reason -- crypto/cash transactions never had an asset type at all.
+--
+-- pcm_assets has zero rows -- purely additive, no backfill, nothing
+-- currently depends on the NOT NULL constraint being enforced.
+ALTER TABLE pcm_assets ALTER COLUMN asset_type DROP NOT NULL;

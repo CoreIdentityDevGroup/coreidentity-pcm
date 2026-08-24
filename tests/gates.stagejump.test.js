@@ -16,6 +16,11 @@
 // Updated to assert the corrected behavior once the fix landed -- a test
 // that keeps asserting a known bug after the bug is fixed is worse than
 // no test.
+//
+// role: 'trade_group_owner' below is deliberately not renamed to
+// 'facilitator' -- doubles as an alias-window regression test
+// (2026-08-17 access-control redesign, authorize.js's normalizeRole()).
+// See tests/access-control-redesign.test.js for the explicit alias tests.
 'use strict';
 
 jest.mock('../api/services/governance', () => ({
