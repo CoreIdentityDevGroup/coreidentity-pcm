@@ -64,43 +64,23 @@ const GATE_REQUIREMENTS = {
       `SELECT COUNT(*) FROM pcm_kyc_documents
        WHERE client_id = $1 AND vault_status = 'active'`, [client_id]
     );
-    // 2026-08-17 (Intake Officer scope, third revision): previously only
-    // checked a POF record EXISTS, never whether it passed (flagged as a
-    // known gap in the OFAC-branch style below, now closed the same way).
-    // Legal now verifies POF as part of the same review that produces the
-    // legal attestation (migration 0016) -- checked here by joining each
-    // POF record to its linked attestation, not by a second independent
-    // confirmation step. A client's approved-and-confirmed POF outcome
-    // satisfies this for every asset that client holds, not just the one
-    // whose review produced it (see 0016's header) -- LEFT JOIN across all
-    // of the client's active POF records, not scoped to this asset_id.
+    // Restored 2026-08-24 to its own evidence (KYC documents, POF
+    // record, OFAC status) -- legal attestation is removed this session
+    // (CoreG reviews its own documentation; there is no external
+    // counsel step). This reverts to the pre-migration-0016 check: a POF
+    // record exists. No outcome/approve-deny field to check anymore --
+    // that vocabulary belonged to the removed external-attestation
+    // model, not to a record CoreG itself holds.
     const pof = await db.clients.query(
-      `SELECT po.pof_id, po.outcome, la.status AS attestation_status
-       FROM pcm_pof_records po
-       LEFT JOIN pcm_legal_attestations la ON la.attestation_id = po.attestation_id
-       WHERE po.client_id = $1 AND po.vault_status = 'active'
-       ORDER BY po.created_at DESC`, [client_id]
+      `SELECT COUNT(*) FROM pcm_pof_records
+       WHERE client_id = $1 AND vault_status = 'active'`, [client_id]
     );
     const ofac = await db.clients.query(
       `SELECT ofac_status FROM pcm_clients WHERE client_id = $1`, [client_id]
     );
     const errors = [];
     if (parseInt(kyc.rows[0].count) === 0) errors.push('No KYC documents on file');
-
-    if (pof.rows.length === 0) {
-      errors.push('No Proof of Funds on file');
-    } else {
-      const pofSatisfied = pof.rows.some(r => r.outcome === 'approved' && r.attestation_status === 'confirmed');
-      if (!pofSatisfied) {
-        if (pof.rows.some(r => r.outcome === 'denied')) {
-          errors.push('Proof of Funds verification denied by legal — package cannot proceed');
-        } else if (pof.rows.some(r => r.outcome === 'approved' && r.attestation_status !== 'confirmed')) {
-          errors.push('Proof of Funds outcome recorded but the underlying legal attestation is not yet countersigned');
-        } else {
-          errors.push('Proof of Funds on file but not yet verified by legal');
-        }
-      }
-    }
+    if (parseInt(pof.rows[0].count) === 0) errors.push('No Proof of Funds on file');
 
     // CLOSE-GAP-27: allowlist, not blocklist. Enumerating only the bad
     // values previously let 'clear' -- an unauthoritative heuristic
@@ -152,46 +132,6 @@ const GATE_REQUIREMENTS = {
 
     if (!ofacSatisfied) {
       errors.push(`OFAC screening not satisfied (status: ${ofacStatus || 'none'}) — requires an authoritative real-engine clear result, a confirmed dual-control override (engine flagged a match), or a confirmed out-of-band attestation (engine could not authoritatively screen)`);
-    }
-
-    // Legal review, 2026-08-17 access-control redesign (corrected
-    // 2026-08-17, same day -- legal also assigns a handler, not just
-    // reviews): counsel is internal to the platform owners but external
-    // to CoreG, has no portal account, and never performs the review
-    // inside this system -- the platform only records that it happened
-    // (see pcm_legal_attestations / api/routes/assets.js's
-    // legal-attestation routes). Asset-scoped, not just client-scoped --
-    // assignment is by asset type, so a client with multiple assets can
-    // route each to a different handler; the lookup narrows to this
-    // specific asset, not "any attestation on this client." Distinguishing
-    // "no attestation" from "entered but not yet countersigned" here, same
-    // as the OFAC branch above distinguishes its own sub-states, rather
-    // than collapsing both into one message.
-    // outcome checked alongside status (2026-08-17 correction: legal
-    // returns a binary approve/deny, not just "reviewed"). A confirmed
-    // DENIAL must not satisfy this gate -- in normal operation the
-    // countersign route's automatic rejection already moves the asset to
-    // 'rejected' before anyone could reach this check again (isValidTransition
-    // blocks all forward movement out of 'rejected' unconditionally), but
-    // this still fails closed rather than assuming that transition always
-    // ran, e.g. if it errored (see assets.js countersign route's handling
-    // of that case).
-    const legal = await db.clients.query(
-      `SELECT status, outcome FROM pcm_legal_attestations
-       WHERE client_id = $1 AND asset_id = $2 ORDER BY entered_at DESC LIMIT 1`, [client_id, asset_id]
-    );
-    const legalRow = legal.rows[0];
-    if (!legalRow || legalRow.status !== 'confirmed' || legalRow.outcome !== 'approved') {
-      if (legalRow?.status === 'confirmed' && legalRow.outcome === 'denied') {
-        errors.push('Legal review denied — package rejected, cannot proceed');
-      } else if (legalRow?.status === 'pending_countersign') {
-        // Stale wording fixed in passing (found while touching this
-        // function for the POF gate change above): countersign was
-        // widened to all three roles this session, not Facilitator-only.
-        errors.push('Legal attestation recorded but not yet countersigned');
-      } else {
-        errors.push('No legal-review attestation on file');
-      }
     }
 
     return errors;
@@ -319,6 +259,33 @@ const GATE_REQUIREMENTS = {
     const errors = [];
     if (!val.rows.length) errors.push('No valuation on file');
     if (val.rows[0]?.date_validation_status !== 'passed') errors.push('Valuation date validation not passed');
+
+    // Platform approval, 2026-08-24 (replaces legal attestation as the
+    // securitization -> tokenization gate; see api/routes/assets.js's
+    // platform-submission routes). Independent precondition from the
+    // valuation check above -- both required. Latest submission only: a
+    // corrected resubmission after a denial creates a new submission
+    // row rather than mutating the old one (no route updates an
+    // existing pcm_platform_submissions row), so "latest" is always the
+    // live one.
+    const submission = await db.assets.query(
+      `SELECT submission_id FROM pcm_platform_submissions
+       WHERE asset_id = $1 ORDER BY submitted_at DESC LIMIT 1`, [asset_id]
+    );
+    if (!submission.rows.length) {
+      errors.push('No platform submission on file');
+    } else {
+      const response = await db.assets.query(
+        `SELECT decision FROM pcm_platform_responses
+         WHERE submission_id = $1 ORDER BY recorded_at DESC LIMIT 1`, [submission.rows[0].submission_id]
+      );
+      const decision = response.rows[0]?.decision;
+      if (decision === 'DENIED') {
+        errors.push('Platform denied this submission — package cannot proceed');
+      } else if (decision !== 'APPROVED') {
+        errors.push('Platform submission recorded but response not yet received');
+      }
+    }
     return errors;
   },
 

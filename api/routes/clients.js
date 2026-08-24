@@ -263,8 +263,7 @@ router.get('/:id/pof', ownClient, async (req, res, next) => {
   try {
     const result = await db.clients.query(
       `SELECT pof_id, declared_amount, currency, issuing_bank,
-              submission_date, verified, verified_at, vault_status, gcs_object_path,
-              outcome, entered_by, entered_at, attestation_id
+              submission_date, verified, verified_at, vault_status, gcs_object_path
        FROM pcm_pof_records
        WHERE client_id = $1 AND vault_status = 'active'
        ORDER BY created_at DESC`,
@@ -315,75 +314,6 @@ router.post('/:id/pof', authorize('intake_officer'), async (req, res, next) => {
     }).catch(err => console.error(JSON.stringify({ level:'error', message:'POF auto-trigger error', error: err.message })));
 
     res.status(201).json(result.rows[0]);
-  } catch (err) { next(err); }
-});
-
-// ─── RECORD LEGAL'S POF OUTCOME (2026-08-17, Intake Officer scope, third
-// revision) ─────────────────────────────────────────────────────────────────
-// Replaces the old PATCH .../pof/:pof_id/verify. Under the confirmed model,
-// legal performs POF verification as part of the same official review that
-// produces the legal attestation -- there is no separate Program-Manager-
-// performed determination anymore. This route RECORDS legal's outcome, it
-// does not perform verification -- same shift as legal-attestation itself
-// (POST /assets/:id/legal-attestation), and gated identically: Intake
-// Officer or Program Manager, whichever is the assigned handler legal
-// picked, self-referential via req.user same as that route (never a
-// caller-supplied identity).
-//
-// attestation_id is required and must reference a real, existing
-// attestation for THIS client -- provenance for which review event
-// actually decided this, not a re-verification gate (see migration 0016's
-// header for why a client's POF outcome, once recorded, satisfies every
-// asset that client holds, not just the one whose review produced it).
-//
-// No countersign on this route, deliberately (Todd, explicit): legal's POF
-// determination and the legal attestation are the same review event, so
-// the attestation's own countersign is what confirms both -- a second,
-// POF-specific countersign on the same underlying review would be
-// redundant dual control. GATE_REQUIREMENTS.kyc_verification (below)
-// enforces this by requiring the linked attestation to be 'confirmed', not
-// by adding a second confirmation step here.
-router.patch('/:id/pof/:pof_id/legal-outcome', authorize('intake_officer', 'program_manager'), async (req, res, next) => {
-  try {
-    const { outcome, attestation_id } = req.body;
-    // Binary, no conditions, no default -- same vocabulary and same
-    // reasoning as legal-attestation's outcome: a regulatory decision must
-    // be stated explicitly, never inferred.
-    if (outcome !== 'approved' && outcome !== 'denied') {
-      return res.status(400).json({ error: "outcome is required and must be 'approved' or 'denied'" });
-    }
-    if (!attestation_id) {
-      return res.status(400).json({ error: 'attestation_id is required — which legal review recorded this' });
-    }
-
-    const attestation = await db.clients.query(
-      `SELECT attestation_id FROM pcm_legal_attestations WHERE attestation_id = $1 AND client_id = $2`,
-      [attestation_id, req.params.id]
-    );
-    if (!attestation.rows.length) {
-      return res.status(404).json({ error: 'No matching legal attestation for this client' });
-    }
-
-    const existing = await db.clients.query(
-      `SELECT pof_id, outcome FROM pcm_pof_records WHERE pof_id = $1 AND client_id = $2`,
-      [req.params.pof_id, req.params.id]
-    );
-    if (!existing.rows.length) return res.status(404).json({ error: 'POF record not found' });
-    if (existing.rows[0].outcome !== null) {
-      return res.status(409).json({
-        error: `This POF record already has a recorded outcome (${existing.rows[0].outcome}). A corrected package is a new package, not a resubmission.`
-      });
-    }
-
-    const enteredBy = req.user.sub || req.user.email;
-    const result = await db.clients.query(
-      `UPDATE pcm_pof_records
-       SET outcome = $1, entered_by = $2, entered_at = NOW(), attestation_id = $3
-       WHERE pof_id = $4 AND client_id = $5
-       RETURNING *`,
-      [outcome, enteredBy, attestation_id, req.params.pof_id, req.params.id]
-    );
-    res.json(result.rows[0]);
   } catch (err) { next(err); }
 });
 
@@ -623,11 +553,6 @@ router.patch('/:id/ofac/override/:result_id/countersign', authorize('facilitator
     res.json(updated.rows[0]);
   } catch (err) { next(err); }
 });
-
-// Legal-review attestation routes moved to api/routes/assets.js
-// (POST/PATCH /:id/legal-attestation) -- corrected 2026-08-17, same day:
-// the decision is asset-level (legal assigns a handler by asset type),
-// matching where valuations/documents already live, not client-level.
 
 // ─── SOFT DELETE CLIENT ───────────────────────────────────────────────────────
 router.delete('/:id', authorize('facilitator'), async (req, res, next) => {

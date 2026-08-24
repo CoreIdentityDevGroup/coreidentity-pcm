@@ -1,14 +1,21 @@
 -- One-year retention FLOOR (regulatory minimum -- do not delete before,
--- not a purge-after requirement) on legal attestations and everything
--- they attest to. Run against the pcm_clients database. Pairs with
+-- not a purge-after requirement) on the records the kyc_verification
+-- gate depends on. Run against the pcm_clients database. Pairs with
 -- 0014b-retention-floor-pcm_assets.sql (pcm_assets database) -- one
 -- logical policy split across the two physical databases these tables
--- live in, same reason 0013a/0013b were split.
+-- live in.
 --
--- SCOPE: an attestation retained past the records it attests to protects
--- nothing, so the floor covers pcm_legal_attestations AND everything the
--- kyc_verification gate already depends on: pcm_clients, KYC documents,
--- POF records, OFAC results (pcm_assets covered separately in 0014b).
+-- CORRECTED 2026-08-24: this migration originally also covered
+-- pcm_legal_attestations (a fifth trigger, trg_retention_floor_pcm_legal_attestations).
+-- Legal attestation was removed entirely this session -- the table it
+-- protected no longer exists, so that trigger is dropped along with it,
+-- not superseded (neither was ever deployed). The remaining four
+-- triggers below are untouched by that removal -- they protect real
+-- evidence CoreG's own review depends on, never depended on legal
+-- attestation existing.
+--
+-- SCOPE: pcm_clients, KYC documents, POF records, OFAC results
+-- (pcm_assets covered separately in 0014b).
 --
 -- PCM HAS NO DELETION PATH FOR THESE RECORDS TODAY -- confirmed by
 -- grepping the entire application for `DELETE FROM`: zero hits. This
@@ -40,12 +47,12 @@
 -- TEST-DATA ARCHIVE INTERACTION (REMAINING-WORK-QUEUE.md 5.4, spec
 -- written/unexecuted): that archive is for synthetic/test-provenance
 -- contamination, a different mechanism from this floor entirely. Real
--- attestation rows (and the real records they reference) are explicitly
--- OUT OF SCOPE for that archive -- whoever builds it must exclude real
--- records by an explicit test-provenance marker, not by inferring "old"
--- means "test." A record protected by this floor that got swept into
--- that archive by an "old rows" heuristic would violate the floor this
--- migration exists to enforce.
+-- records protected here are explicitly OUT OF SCOPE for that archive --
+-- whoever builds it must exclude real records by an explicit
+-- test-provenance marker, not by inferring "old" means "test." A record
+-- protected by this floor that got swept into that archive by an "old
+-- rows" heuristic would violate the floor this migration exists to
+-- enforce.
 CREATE OR REPLACE FUNCTION enforce_one_year_retention() RETURNS trigger AS $$
 DECLARE
   age_column text := TG_ARGV[0];
@@ -76,9 +83,3 @@ CREATE TRIGGER trg_retention_floor_pcm_pof_records
 CREATE TRIGGER trg_retention_floor_pcm_ofac_results
   BEFORE DELETE ON pcm_ofac_results
   FOR EACH ROW EXECUTE FUNCTION enforce_one_year_retention('created_at');
-
--- entered_at, not created_at -- pcm_legal_attestations' own creation
--- timestamp column (see db/migrations/0011).
-CREATE TRIGGER trg_retention_floor_pcm_legal_attestations
-  BEFORE DELETE ON pcm_legal_attestations
-  FOR EACH ROW EXECUTE FUNCTION enforce_one_year_retention('entered_at');

@@ -429,226 +429,186 @@ router.get('/:id/bank-assignments', ownAsset, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ─── RECORD LEGAL-REVIEW ATTESTATION (step 1 of 2) ───────────────────────────
-// 2026-08-17 access-control redesign, corrected same day: legal doesn't
-// just review, they DECIDE WHO HANDLES the package (by asset type and
-// expertise) -- an Intake Officer or a Program Manager. Counsel is
-// internal to the platform owners but external to CoreG -- no portal
-// account, never performs the review inside this system. Asset-scoped
-// (not client-scoped): a client can hold multiple assets of different
-// types, each routed to a different handler -- matches where
-// valuations/documents already live, not clients.js.
+// ─── ASSIGN PACKAGE HANDLER ───────────────────────────────────────────────────
+// 2026-08-24 (replaces legal-attestation entry, removed this session --
+// CoreG reviews its own documentation, there is no external counsel step
+// to piggyback the assignment on anymore). Standalone: claims ownership
+// of a package, nothing else. Self-referential by design, same
+// constraint the old entry route had -- assigned_role/assigned_staff_id
+// come from req.user, NEVER the request body, so a caller cannot claim
+// an assignment on someone else's behalf.
 //
-// assigned_staff_id / assigned_role come from req.user, NEVER from the
-// request body -- the submitter IS the assignment (legal's decision was
-// communicated out-of-band; this route is where the person legal picked
-// identifies themselves by submitting it). Accepting these as
-// caller-supplied fields would let anyone claim an assignment on someone
-// else's behalf.
-//
-// Writes two things in one place: the pcm_legal_attestations row (the
-// immutable historical record) and pcm_assets' assigned_handler_role/
-// assigned_handler_staff_id (the live pointer checkRoleAuthority reads).
-// Both reflect the assignment the moment it's claimed -- countersign
-// (below) verifies the ATTESTATION is legitimate, it doesn't gate
-// ownership taking effect.
-router.post('/:id/legal-attestation', authorize('intake_officer', 'program_manager'), async (req, res, next) => {
+// Facilitator can self-assign too (superset rule, unchanged from the old
+// route) -- assigned_handler_role's CHECK still allows 'facilitator'
+// (db/migrations/0013). The stored role is descriptive only; ownership
+// authority is decided by staff_id match in checkRoleAuthority, not this
+// value.
+router.post('/:id/assign', authorize('intake_officer', 'program_manager'), async (req, res, next) => {
   try {
-    const { counsel_name, review_date, reference, outcome } = req.body;
-    if (!counsel_name || !counsel_name.trim()) {
-      return res.status(400).json({ error: 'counsel_name is required — name the reviewing counsel' });
-    }
-    if (!review_date || !review_date.trim()) {
-      return res.status(400).json({ error: 'review_date is required — when counsel actually reviewed' });
-    }
-    if (!reference || !reference.trim()) {
-      return res.status(400).json({ error: 'reference is required — matter number, memo reference, or a reason' });
-    }
-    // Binary, no conditions -- legal returns approve or deny, nothing
-    // else (2026-08-17 correction). No default: a regulatory decision
-    // must be stated explicitly, never inferred.
-    if (outcome !== 'approved' && outcome !== 'denied') {
-      return res.status(400).json({ error: "outcome is required and must be 'approved' or 'denied'" });
-    }
-
     const asset = await db.assets.query(
-      `SELECT asset_id, client_id FROM pcm_assets WHERE asset_id = $1 AND deleted_at IS NULL`,
+      `SELECT asset_id FROM pcm_assets WHERE asset_id = $1 AND deleted_at IS NULL`,
       [req.params.id]
     );
     if (!asset.rows.length) return res.status(404).json({ error: 'Asset not found' });
-    const { client_id } = asset.rows[0];
 
-    // No-supersede rule, general (2026-08-17 correction): once ANY
-    // attestation on this asset reaches 'confirmed' -- approved or
-    // denied -- reject further entries outright. A denied attestation
-    // must stay attached to the rejected asset as the record of why, not
-    // be overwritable; an already-approved asset shouldn't get a second
-    // attestation either. One rule, not a denial-specific special case.
-    const existingConfirmed = await db.clients.query(
-      `SELECT attestation_id, outcome FROM pcm_legal_attestations
-       WHERE asset_id = $1 AND status = 'confirmed' LIMIT 1`,
-      [req.params.id]
-    );
-    if (existingConfirmed.rows.length) {
-      return res.status(409).json({
-        error: `This asset already has a confirmed legal attestation (outcome: ${existingConfirmed.rows[0].outcome}). A corrected package is a new package, not a resubmission.`,
-        attestation_id: existingConfirmed.rows[0].attestation_id
-      });
-    }
-
-    // Facilitator can enter too (superset rule, confirmed explicitly) --
-    // assigned_role/assigned_handler_role allow 'facilitator' as a real
-    // value for exactly this case (see db/migrations/0013a/0013b's
-    // comments). The stored role is purely descriptive; ownership
-    // authority is decided by staff_id match, not this value -- a
-    // Facilitator-assigned asset is already fully accessible to that
-    // Facilitator regardless.
-    const submitterRole = normalizeRole(req.user.role);
-    const enteredBy = req.user.sub || req.user.email;
+    const assignedRole = normalizeRole(req.user.role);
     const staffId = req.user.staff_id;
 
-    const result = await db.clients.query(
-      `INSERT INTO pcm_legal_attestations
-        (client_id, asset_id, counsel_name, review_date, reference, outcome, entered_by, assigned_role, assigned_staff_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-       RETURNING *`,
-      [client_id, req.params.id, counsel_name, review_date, reference, outcome, enteredBy, submitterRole, staffId]
+    const result = await db.assets.query(
+      `UPDATE pcm_assets SET assigned_handler_role = $1, assigned_handler_staff_id = $2
+       WHERE asset_id = $3 RETURNING asset_id, assigned_handler_role, assigned_handler_staff_id`,
+      [assignedRole, staffId, req.params.id]
     );
 
-    await db.assets.query(
-      `UPDATE pcm_assets SET assigned_handler_role = $1, assigned_handler_staff_id = $2 WHERE asset_id = $3`,
-      [submitterRole, staffId, req.params.id]
-    );
-
-    res.status(201).json({
-      attestation_id: result.rows[0].attestation_id,
-      status:          'pending_countersign',
-      outcome,
-      assigned_role:   submitterRole,
-      message:         'Legal attestation recorded and handler assigned. A different principal (Facilitator) must countersign before this affects the KYC gate.',
-      entered_by:      enteredBy
-    });
+    res.json(result.rows[0]);
   } catch (err) { next(err); }
 });
 
-// ─── COUNTERSIGN LEGAL-REVIEW ATTESTATION (step 2 of 2) ──────────────────────
-// Facilitator-only. Now explicitly load-bearing, not just consistent
-// with the OFAC pattern: the handler is recording their OWN assignment
-// (self-referential by design, see the entry route above), so this
-// countersign is the ONLY independent check that legal actually made
-// this call -- there is no second person on the entry side the way
-// KYC-registration/OFAC-screening naturally has one. Only after this
-// succeeds does an APPROVED attestation satisfy
-// GATE_REQUIREMENTS.kyc_verification.
+// ─── SUBMIT PACKAGE TO PLATFORM ───────────────────────────────────────────────
+// 2026-08-24. CoreG is an intermediary that collects and reviews
+// documentation itself (stages 1-7). Once securitization (stage 7)
+// completes, the package goes to the platform -- an external party with
+// no portal login -- for its own review; tokenization (stage 8) only
+// proceeds on the platform's approval (see GATE_REQUIREMENTS.tokenization
+// in api/services/pipeline.js). This route records that the package was
+// sent, for accountability, same discipline pcm_ofac_results already
+// applies to CoreG's own screening: structured fields, a recorded
+// principal, a recorded timestamp.
 //
-// Denial handling (2026-08-17 correction): a denial gets the identical
-// dual-control treatment as an approval -- nothing about "this package
-// is dead" is final on an unconfirmed single-principal claim, matching
-// the approval path exactly rather than treating denial as a lesser
-// case. Only once COUNTERSIGNED does a denied outcome automatically move
-// the asset to 'rejected' -- reusing advancePipeline() itself (not a raw
-// UPDATE) so the transition gets the same validity check, audit trail
-// row, and Sentinel gate every other stage change gets.
-//
-// COUNTERSIGN ROLE, widened (2026-08-17, second correction): any of the
-// three roles may countersign, not Facilitator-only -- in practice
-// primarily Intake Officer or Program Manager. The distinct-principal
-// check below is unchanged and is what actually protects this: the
-// countersigner must differ from whoever entered the attestation,
-// regardless of which role either of them holds.
-//
-// This widening breaks an assumption the denial-rejection code below
-// used to be able to make: 'rejected' is Facilitator-only in
-// gate_roles, so passing the countersigning req.user straight through to
-// advancePipeline() would 403 for a Program Manager or Intake Officer
-// countersigner (unless they happened to also be this asset's assigned
-// handler, which by the distinct-principal rule they specifically are
-// not).
-//
-// NOT fixed by adding 'system' to 'rejected'.gate_roles (considered and
-// rejected while writing this): checkRoleAuthority's system-gated branch
-// is a full early-return that REPLACES the human-role check with a
-// systemCheck-object requirement -- it would also change what
-// POST /pipeline/reject needs from an ordinary human Facilitator,
-// breaking the existing working case to fix this one.
-//
-// Fixed instead by authorizing the internal advancePipeline() call with
-// a role-overridden actor: same sub/staff_id as the real countersigning
-// principal (so transitioned_by / the notes field below both show who
-// actually did this -- accountability preserved), role forced to
-// 'facilitator' only for this one call, since isFacilitator() passes
-// every gate unconditionally. This is legitimate, not a bypass: the real
-// authorization decision already happened one step up (this route's own
-// authorize() + the distinct-principal check), the same as the
-// countersign-is-a-consequence-not-a-new-decision reasoning that
-// originally justified reusing req.user here at all. Known, accepted
-// imprecision: transition_role on this one row will read
-// 'facilitator' even when the real countersigner is a Program Manager
-// or Intake Officer -- reflects the trust level the action was actually
-// authorized at, not a literal role claim, and the notes field spells
-// out who actually countersigned in plain text for anyone auditing this.
-router.patch('/:id/legal-attestation/:attestation_id/countersign', authorize('facilitator', 'program_manager', 'intake_officer'), async (req, res, next) => {
+// manifest is a point-in-time SNAPSHOT of what's actually being sent, not
+// a set of references to resolve later -- buildSubmissionManifest reads
+// the real field values off every evidence table at submission time, so
+// if a document or valuation changes or gets superseded afterward, this
+// row still shows what the platform actually received.
+async function buildSubmissionManifest(asset_id, client_id) {
+  const [asset, valuations, assetDocuments, integrity, agreements, kycDocs, pofRecords, ofac] = await Promise.all([
+    db.assets.query(`SELECT * FROM pcm_assets WHERE asset_id = $1`, [asset_id]),
+    db.assets.query(`SELECT * FROM pcm_valuations WHERE asset_id = $1 ORDER BY created_at DESC`, [asset_id]),
+    db.assets.query(`SELECT doc_id, doc_type, doc_subtype, file_name, submission_date, uploaded_at, uploaded_by
+                      FROM pcm_asset_documents WHERE asset_id = $1 AND vault_status = 'active'`, [asset_id]),
+    db.assets.query(`SELECT * FROM pcm_instrument_integrity_results WHERE asset_id = $1`, [asset_id]),
+    db.forms.query(`SELECT agreement_id, agreement_type, status, effective_date, execution_date, file_name
+                     FROM pcm_agreements WHERE asset_id = $1 AND status = 'fully_executed'`, [asset_id]),
+    db.clients.query(`SELECT doc_id, doc_type, doc_subtype, file_name, submission_date, uploaded_at, uploaded_by
+                       FROM pcm_kyc_documents WHERE client_id = $1 AND vault_status = 'active'`, [client_id]),
+    db.clients.query(`SELECT pof_id, declared_amount, currency, issuing_bank, submission_date, verified
+                       FROM pcm_pof_records WHERE client_id = $1 AND vault_status = 'active'`, [client_id]),
+    db.clients.query(`SELECT result_id, provider, status, match_method, screened_at
+                       FROM pcm_ofac_results WHERE client_id = $1 ORDER BY screened_at DESC LIMIT 1`, [client_id])
+  ]);
+
+  return {
+    asset:               asset.rows[0] || null,
+    valuations:          valuations.rows,
+    asset_documents:     assetDocuments.rows,
+    instrument_integrity: integrity.rows,
+    agreements:          agreements.rows,
+    kyc_documents:       kycDocs.rows,
+    pof_records:         pofRecords.rows,
+    ofac_result:         ofac.rows[0] || null
+  };
+}
+
+router.post('/:id/platform-submission', authorize('program_manager'), async (req, res, next) => {
   try {
-    const existing = await db.clients.query(
-      `SELECT * FROM pcm_legal_attestations WHERE attestation_id = $1 AND asset_id = $2`,
-      [req.params.attestation_id, req.params.id]
+    const asset = await db.assets.query(
+      `SELECT asset_id, client_id, pipeline_stage FROM pcm_assets WHERE asset_id = $1 AND deleted_at IS NULL`,
+      [req.params.id]
     );
-    if (!existing.rows.length) return res.status(404).json({ error: 'Attestation not found' });
+    if (!asset.rows.length) return res.status(404).json({ error: 'Asset not found' });
+    const { client_id, pipeline_stage } = asset.rows[0];
 
-    const attestation = existing.rows[0];
-    if (attestation.status !== 'pending_countersign') {
-      return res.status(409).json({ error: `Attestation is not pending countersign (current state: ${attestation.status})` });
+    if (pipeline_stage !== 'securitization') {
+      return res.status(409).json({ error: `Asset must be at 'securitization' to submit to the platform (current stage: ${pipeline_stage})` });
     }
 
-    const countersignedBy = req.user.sub || req.user.email;
-    if (attestation.entered_by === countersignedBy) {
-      return res.status(403).json({ error: 'Cannot countersign your own attestation entry — dual control requires a different principal' });
-    }
+    const manifest = await buildSubmissionManifest(req.params.id, client_id);
+    const submittedBy = req.user.sub || req.user.email;
 
-    const updated = await db.clients.query(
-      `UPDATE pcm_legal_attestations
-       SET status = 'confirmed', countersigned_by = $1, countersigned_at = NOW()
-       WHERE attestation_id = $2
-       RETURNING *`,
-      [countersignedBy, req.params.attestation_id]
+    const result = await db.assets.query(
+      `INSERT INTO pcm_platform_submissions (asset_id, submitted_by, manifest)
+       VALUES ($1,$2,$3) RETURNING submission_id, asset_id, submitted_by, submitted_at`,
+      [req.params.id, submittedBy, JSON.stringify(manifest)]
     );
 
-    const governance = require('../services/governance');
-    await governance.salLog({
-      agent_id: countersignedBy,
-      action:   'LEGAL_ATTESTATION_COUNTERSIGNED',
-      resource: `pcm:asset:${req.params.id}`,
-      decision: 'ALLOW',
-      context:  { entered_by: attestation.entered_by, countersigned_by: countersignedBy, attestation_id: req.params.attestation_id, assigned_role: attestation.assigned_role, assigned_staff_id: attestation.assigned_staff_id, outcome: attestation.outcome }
-    }).catch(() => {});
+    res.status(201).json(result.rows[0]);
+  } catch (err) { next(err); }
+});
+
+router.get('/:id/platform-submissions', ownAsset, async (req, res, next) => {
+  try {
+    const result = await db.assets.query(
+      `SELECT submission_id, asset_id, submitted_by, submitted_at
+       FROM pcm_platform_submissions WHERE asset_id = $1 ORDER BY submitted_at DESC`,
+      [req.params.id]
+    );
+    res.json({ submissions: result.rows });
+  } catch (err) { next(err); }
+});
+
+// ─── RECORD PLATFORM RESPONSE ─────────────────────────────────────────────────
+// APPROVED or DENIED, no conditions -- same binary-no-default discipline
+// the removed legal-attestation outcome used. No countersign: the
+// platform itself is the second party to this decision, so a single
+// CoreG principal recording what the platform said is not the same kind
+// of claim an out-of-band attestation was.
+//
+// DENIED archives the package by moving it to 'rejected' -- reusing the
+// existing terminal stage rather than inventing a distinct "archived"
+// state (see this session's design note: 'rejected' is already
+// unconditionally terminal, already audit-logged via
+// pcm_pipeline_history, and the reason a package died is already fully
+// captured in pcm_platform_responses + the transition notes below, same
+// pattern the removed legal-attestation-denial auto-reject used).
+router.post('/:id/platform-submission/:submission_id/response', authorize('program_manager'), async (req, res, next) => {
+  try {
+    const { decision } = req.body;
+    if (decision !== 'APPROVED' && decision !== 'DENIED') {
+      return res.status(400).json({ error: "decision is required and must be 'APPROVED' or 'DENIED'" });
+    }
+
+    const submission = await db.assets.query(
+      `SELECT submission_id, asset_id FROM pcm_platform_submissions
+       WHERE submission_id = $1 AND asset_id = $2`,
+      [req.params.submission_id, req.params.id]
+    );
+    if (!submission.rows.length) return res.status(404).json({ error: 'Submission not found' });
+
+    const existingResponse = await db.assets.query(
+      `SELECT response_id FROM pcm_platform_responses WHERE submission_id = $1`,
+      [req.params.submission_id]
+    );
+    if (existingResponse.rows.length) {
+      return res.status(409).json({ error: 'This submission already has a recorded response.' });
+    }
+
+    const recordedBy = req.user.sub || req.user.email;
+    const result = await db.assets.query(
+      `INSERT INTO pcm_platform_responses (submission_id, decision, recorded_by)
+       VALUES ($1,$2,$3) RETURNING *`,
+      [req.params.submission_id, decision, recordedBy]
+    );
 
     let rejection = null;
-    if (attestation.outcome === 'denied') {
+    if (decision === 'DENIED') {
+      const asset = await db.assets.query(`SELECT client_id FROM pcm_assets WHERE asset_id = $1`, [req.params.id]);
       const { advancePipeline } = require('../services/pipeline');
-      // role forced to 'facilitator' for this one call only -- see this
-      // route's header comment for why (real identity preserved via sub/
-      // staff_id, the actual authorization already happened above).
       rejection = await advancePipeline({
         asset_id: req.params.id,
-        client_id: attestation.client_id,
+        client_id: asset.rows[0].client_id,
         to_stage: 'rejected',
         user: { sub: req.user.sub, staff_id: req.user.staff_id, role: 'facilitator' },
-        notes: `Automatic: legal review denied (attestation ${attestation.attestation_id}, countersigned by ${countersignedBy}, actual role ${req.user.role})`
+        notes: `Automatic: platform denied submission ${req.params.submission_id} (recorded by ${recordedBy})`
       });
       if (!rejection.success) {
-        // Fail loudly, not silently -- a denial that couldn't actually
-        // move the asset to rejected must not read to the caller as if
-        // it succeeded cleanly. The attestation itself IS confirmed at
-        // this point (that write already committed); this surfaces the
-        // secondary failure without pretending it didn't happen.
         console.error(JSON.stringify({
-          level: 'error', message: 'Denial countersigned but automatic rejection failed',
-          attestation_id: attestation.attestation_id, asset_id: req.params.id, error: rejection.error
+          level: 'error', message: 'Platform denial recorded but automatic rejection failed',
+          submission_id: req.params.submission_id, asset_id: req.params.id, error: rejection.error
         }));
       }
     }
 
-    res.json({ ...updated.rows[0], auto_rejected: attestation.outcome === 'denied', rejection_result: rejection });
+    res.status(201).json({ ...result.rows[0], auto_rejected: decision === 'DENIED', rejection_result: rejection });
   } catch (err) { next(err); }
 });
 

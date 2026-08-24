@@ -77,68 +77,38 @@ async function confirmOfacAttestation(client_id) {
   );
 }
 
-// Replicates exactly what POST .../legal-attestation + PATCH
-// .../legal-attestation/:id/countersign produces (2026-08-17
-// access-control redesign) -- the only path that satisfies the
-// kyc_verification gate's legal-review check. Writing the fixture
-// directly rather than calling the API mirrors the DB state a real
-// confirmed attestation leaves behind, same convention as
-// confirmOfacAttestation above.
-// asset_id is required (2026-08-17 correction -- attestation is
-// asset-scoped, assignment is by asset type). assigned_staff_id has a
-// real FK to pcm_staff, so this creates a throwaway staff row unless one
-// is passed in -- a plain string like the old fixture's
-// 'fixture-principal-2' would violate the constraint.
-//
-// 2026-08-17 (Intake Officer scope, third revision): also links and
-// confirms the client's POF outcome, matching the real "one countersign
-// covers both" design (migration 0016) -- if an addPofRecord() fixture
-// call already produced an unrecorded POF row for this client, this
-// stamps it with the same outcome and links it to the new attestation.
-// Silently does nothing if no such row exists (some tests deliberately
-// don't call addPofRecord first, e.g. testing the "No Proof of Funds"
-// failure path) -- this is a convenience default, not a required side
-// effect, same spirit as every other fixture here.
-async function confirmLegalAttestation(client_id, asset_id, overrides = {}) {
-  const assignedStaffId = overrides.assigned_staff_id || (await createStaff({ role: 'intake_officer' })).staff_id;
-  // outcome required NOT NULL since db/migrations/0015 -- defaults to
-  // 'approved' since every existing caller of this fixture wants "gate
-  // satisfied", not a denial.
-  const outcome = overrides.outcome || 'approved';
-  const result = await db.clients.query(
-    `INSERT INTO pcm_legal_attestations
-       (client_id, asset_id, counsel_name, review_date, reference, outcome, entered_by, status,
-        countersigned_by, countersigned_at, assigned_role, assigned_staff_id)
-     VALUES ($1, $2, 'Fixture Counsel', CURRENT_DATE, 'fixture-reference', $5, 'fixture-principal-1', 'confirmed',
-             'fixture-principal-2', NOW(), $3, $4)
-     RETURNING attestation_id`,
-    [client_id, asset_id, overrides.assigned_role || 'intake_officer', assignedStaffId, outcome]
+// Replicates exactly what POST .../platform-submission produces
+// (2026-08-24, replaces the removed legal-attestation fixture) -- a bare
+// submission row, no response yet. Manifest content doesn't matter for
+// gate tests, so a minimal fixture object stands in for the real
+// snapshot buildSubmissionManifest() would produce.
+async function createPlatformSubmission(asset_id, overrides = {}) {
+  const result = await db.assets.query(
+    `INSERT INTO pcm_platform_submissions (asset_id, submitted_by, manifest)
+     VALUES ($1, $2, $3) RETURNING submission_id`,
+    [asset_id, overrides.submitted_by || 'fixture-principal-1', JSON.stringify(overrides.manifest || { fixture: true })]
   );
-  const attestationId = result.rows[0].attestation_id;
-
-  if (overrides.linkPof !== false) {
-    await db.clients.query(
-      `UPDATE pcm_pof_records
-       SET outcome = $1, entered_by = 'fixture-principal-2', entered_at = NOW(), attestation_id = $2
-       WHERE client_id = $3 AND outcome IS NULL AND vault_status = 'active'`,
-      [outcome, attestationId, client_id]
-    );
-  }
-
-  return attestationId;
+  return result.rows[0].submission_id;
 }
 
-// Records a POF outcome directly, for tests that need fine-grained
-// control over the POF/attestation link independent of
-// confirmLegalAttestation's default auto-link (e.g. an approved POF
-// outcome whose linked attestation is deliberately NOT yet confirmed).
-async function confirmPofOutcome(client_id, pof_id, attestation_id, overrides = {}) {
-  await db.clients.query(
-    `UPDATE pcm_pof_records
-     SET outcome = $1, entered_by = 'fixture-principal-2', entered_at = NOW(), attestation_id = $2
-     WHERE client_id = $3 AND pof_id = $4`,
-    [overrides.outcome || 'approved', attestation_id, client_id, pof_id]
+// Records a platform response directly, for tests that need a
+// submission with no response yet vs. one with a recorded decision.
+async function recordPlatformResponse(submission_id, decision = 'APPROVED', overrides = {}) {
+  const result = await db.assets.query(
+    `INSERT INTO pcm_platform_responses (submission_id, decision, recorded_by)
+     VALUES ($1, $2, $3) RETURNING response_id`,
+    [submission_id, decision, overrides.recorded_by || 'fixture-principal-2']
   );
+  return result.rows[0].response_id;
+}
+
+// Convenience: submission + APPROVED response in one call, for tests
+// that just need the tokenization gate's platform-approval check
+// satisfied and don't care about the two-step shape.
+async function confirmPlatformApproval(asset_id, overrides = {}) {
+  const submissionId = await createPlatformSubmission(asset_id, overrides);
+  await recordPlatformResponse(submissionId, overrides.decision || 'APPROVED', overrides);
+  return submissionId;
 }
 
 async function addValuation(asset_id, overrides = {}) {
@@ -225,6 +195,7 @@ async function createStaff(overrides = {}) {
 
 module.exports = {
   createClient, createAsset, addKycDocument, addPofRecord, confirmOfacAttestation,
-  confirmLegalAttestation, confirmPofOutcome, addValuation, addAssetDocument, setInstrumentIntegrityVerified,
+  createPlatformSubmission, recordPlatformResponse, confirmPlatformApproval,
+  addValuation, addAssetDocument, setInstrumentIntegrityVerified,
   setBankAssignment, addExecutedAgreement, mintClassificationToken, createStaff
 };

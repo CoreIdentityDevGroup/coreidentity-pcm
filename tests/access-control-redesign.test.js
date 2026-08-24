@@ -1,10 +1,21 @@
-// 2026-08-17 access-control redesign: legal-review attestation
-// (corrected same day -- legal assigns a handler by asset type, not just
-// reviews), the explicit gate_roles permission sets replacing
-// pipeline.js's old hierarchy plus the additive assigned-handler path,
-// and the trade_group_owner -> facilitator rename's alias window. Real
-// Express app, real HTTP requests via supertest, real isolated local
-// database (see tests/env.setup.js) -- same pattern as
+// 2026-08-17 access-control redesign: the explicit gate_roles permission
+// sets replacing pipeline.js's old hierarchy plus the additive
+// assigned-handler path, and the trade_group_owner -> facilitator
+// rename's alias window.
+//
+// 2026-08-24: legal-review attestation (the two-step entry/countersign
+// mechanic this file originally tested) is removed entirely -- CoreG
+// reviews its own documentation, there is no external counsel step.
+// Replaced by: POST /assets/:id/assign (standalone package-handler
+// assignment, no attestation) and platform submission/response tracking
+// (POST /assets/:id/platform-submission,
+// POST .../platform-submission/:submission_id/response) -- the package
+// goes to an external platform after securitization (stage 7) completes,
+// and platform APPROVED is now the gate requirement for advancing to
+// tokenization (stage 8). See db/migrations/0013, 0017.
+//
+// Real Express app, real HTTP requests via supertest, real isolated
+// local database (see tests/env.setup.js) -- same pattern as
 // gates.http-proof.test.js and password-reset.test.js.
 'use strict';
 
@@ -26,10 +37,9 @@ function tokenFor(role, sub = 'test-fixture', staff_id = 'test-staff-id') {
   return jwt.sign({ sub, role, staff_id }, process.env.JWT_SECRET, { expiresIn: '5m' });
 }
 
-// pcm_legal_attestations.assigned_staff_id is a real FK to pcm_staff
-// (same-database reference, unlike asset_id -- see db/migrations/0013a's
-// comment) -- any test that actually records an attestation needs a real
-// staff row behind the token's staff_id, not an arbitrary string.
+// pcm_assets.assigned_handler_staff_id is written by POST /assets/:id/assign
+// from req.user.staff_id -- tests that exercise assignment need a real
+// staff_id behind the token, not an arbitrary string.
 async function staffToken(role) {
   const staff = await fx.createStaff({ role: role === 'facilitator' ? 'facilitator' : role });
   return { token: tokenFor(role, staff.email, staff.staff_id), staff };
@@ -82,361 +92,256 @@ describe('checkRoleAuthority is synchronous — the missed-await failure mode is
   });
 });
 
-describe('Legal-review attestation — asset-scoped, two-step entry/countersign', () => {
-  test('entry by Intake Officer, countersign by Facilitator, satisfies the kyc_verification gate and assigns the handler', async () => {
+describe('Package handler assignment — POST /assets/:id/assign, standalone, self-referential', () => {
+  test('Intake Officer can self-assign; assigned_role/assigned_staff_id land on pcm_assets', async () => {
     const client_id = await fx.createClient();
     const { asset_id } = await fx.createAsset(client_id);
-    await fx.addKycDocument(client_id);
-    const pof = await fx.addPofRecord(client_id);
-    await fx.confirmOfacAttestation(client_id);
-
-    const beforeErrors = await validateGate('kyc_verification', asset_id, client_id);
-    expect(beforeErrors).toEqual(expect.arrayContaining(['No legal-review attestation on file']));
-
     const io = await staffToken('intake_officer');
-    const entryRes = await request(app)
-      .post(`/api/v1/assets/${asset_id}/legal-attestation`)
-      .set('Authorization', `Bearer ${io.token}`)
-      .send({ counsel_name: 'Jane Counsel, Esq.', review_date: '2026-08-17', reference: 'Matter #4471', outcome: 'approved' });
-    expect(entryRes.status).toBe(201);
-    expect(entryRes.body.status).toBe('pending_countersign');
-    expect(entryRes.body.assigned_role).toBe('intake_officer');
 
-    // Live ownership pointer set at entry, not only at countersign.
-    const assetRow = await db.assets.query(`SELECT assigned_handler_role, assigned_handler_staff_id FROM pcm_assets WHERE asset_id = $1`, [asset_id]);
+    const res = await request(app)
+      .post(`/api/v1/assets/${asset_id}/assign`)
+      .set('Authorization', `Bearer ${io.token}`)
+      .send({});
+    expect(res.status).toBe(200);
+    expect(res.body.assigned_handler_role).toBe('intake_officer');
+    expect(res.body.assigned_handler_staff_id).toBe(io.staff.staff_id);
+
+    const assetRow = await db.assets.query(
+      `SELECT assigned_handler_role, assigned_handler_staff_id FROM pcm_assets WHERE asset_id = $1`, [asset_id]
+    );
     expect(assetRow.rows[0].assigned_handler_role).toBe('intake_officer');
     expect(assetRow.rows[0].assigned_handler_staff_id).toBe(io.staff.staff_id);
-
-    // 2026-08-17 (Intake Officer scope, third revision): the assigned
-    // handler also records legal's POF outcome, same review event, same
-    // gate requirement now -- linked to this attestation.
-    const pofRes = await request(app)
-      .patch(`/api/v1/clients/${client_id}/pof/${pof}/legal-outcome`)
-      .set('Authorization', `Bearer ${io.token}`)
-      .send({ outcome: 'approved', attestation_id: entryRes.body.attestation_id });
-    expect(pofRes.status).toBe(200);
-
-    const pendingErrors = await validateGate('kyc_verification', asset_id, client_id);
-    expect(pendingErrors).toEqual(expect.arrayContaining(['Legal attestation recorded but not yet countersigned']));
-    expect(pendingErrors).not.toContain('No legal-review attestation on file');
-    // POF outcome is recorded (approved) but its linked attestation isn't
-    // confirmed yet -- same one-countersign-covers-both mechanism should
-    // report the POF side as still pending too.
-    expect(pendingErrors).toEqual(expect.arrayContaining(['Proof of Funds outcome recorded but the underlying legal attestation is not yet countersigned']));
-
-    const admin = await staffToken('facilitator');
-    const countersignRes = await request(app)
-      .patch(`/api/v1/assets/${asset_id}/legal-attestation/${entryRes.body.attestation_id}/countersign`)
-      .set('Authorization', `Bearer ${admin.token}`)
-      .send({});
-    expect(countersignRes.status).toBe(200);
-    expect(countersignRes.body.status).toBe('confirmed');
-
-    // The single countersign above -- on the attestation only -- also
-    // satisfies the POF side of the gate now, without a second
-    // countersign step (Todd, explicit: "one countersign covers both").
-    const afterErrors = await validateGate('kyc_verification', asset_id, client_id);
-    expect(afterErrors).toEqual([]);
   });
 
-  test('entry by Program Manager also works -- legal can assign either role', async () => {
+  test('Program Manager and Facilitator can self-assign too', async () => {
     const client_id = await fx.createClient();
-    const { asset_id } = await fx.createAsset(client_id);
-    const pm = await staffToken('program_manager');
-    const entryRes = await request(app)
-      .post(`/api/v1/assets/${asset_id}/legal-attestation`)
-      .set('Authorization', `Bearer ${pm.token}`)
-      .send({ counsel_name: 'Jane Counsel', review_date: '2026-08-17', reference: 'Matter #2', outcome: 'approved' });
-    expect(entryRes.status).toBe(201);
-    expect(entryRes.body.assigned_role).toBe('program_manager');
+    for (const role of ['program_manager', 'facilitator']) {
+      const { asset_id } = await fx.createAsset(client_id);
+      const staff = await staffToken(role);
+      const res = await request(app)
+        .post(`/api/v1/assets/${asset_id}/assign`)
+        .set('Authorization', `Bearer ${staff.token}`)
+        .send({});
+      expect(res.status).toBe(200);
+      expect(res.body.assigned_handler_role).toBe(role);
+    }
   });
 
-  test('Facilitator entry works too (superset rule) and records assigned_role: facilitator', async () => {
-    const client_id = await fx.createClient();
-    const { asset_id } = await fx.createAsset(client_id);
-    const admin = await staffToken('facilitator');
-    const entryRes = await request(app)
-      .post(`/api/v1/assets/${asset_id}/legal-attestation`)
-      .set('Authorization', `Bearer ${admin.token}`)
-      .send({ counsel_name: 'Jane Counsel', review_date: '2026-08-17', reference: 'Matter #3', outcome: 'approved' });
-    expect(entryRes.status).toBe(201);
-    expect(entryRes.body.assigned_role).toBe('facilitator');
-  });
-
-  test('assigned_staff_id/assigned_role come from req.user, not the request body -- a caller cannot claim an assignment for someone else', async () => {
+  test('assigned_handler_role/staff_id come from req.user, not the request body -- a caller cannot claim an assignment for someone else', async () => {
     const client_id = await fx.createClient();
     const { asset_id } = await fx.createAsset(client_id);
     const io = await staffToken('intake_officer');
-    const entryRes = await request(app)
-      .post(`/api/v1/assets/${asset_id}/legal-attestation`)
+    const res = await request(app)
+      .post(`/api/v1/assets/${asset_id}/assign`)
       .set('Authorization', `Bearer ${io.token}`)
       .send({
-        counsel_name: 'Jane Counsel', review_date: '2026-08-17', reference: 'Matter #5', outcome: 'approved',
         // Attempted injection -- must be ignored entirely.
-        assigned_staff_id: 'someone-elses-staff-id', assigned_role: 'program_manager'
+        assigned_handler_staff_id: 'someone-elses-staff-id', assigned_handler_role: 'program_manager'
       });
-    expect(entryRes.status).toBe(201);
-
-    const row = await db.clients.query(`SELECT assigned_staff_id, assigned_role FROM pcm_legal_attestations WHERE attestation_id = $1`, [entryRes.body.attestation_id]);
-    expect(row.rows[0].assigned_staff_id).toBe(io.staff.staff_id);
-    expect(row.rows[0].assigned_role).toBe('intake_officer');
-  });
-
-  test('same principal cannot countersign their own attestation entry', async () => {
-    const client_id = await fx.createClient();
-    const { asset_id } = await fx.createAsset(client_id);
-    const staff = await fx.createStaff({ role: 'intake_officer' });
-    const ioToken = tokenFor('intake_officer', staff.email, staff.staff_id);
-    const entryRes = await request(app)
-      .post(`/api/v1/assets/${asset_id}/legal-attestation`)
-      .set('Authorization', `Bearer ${ioToken}`)
-      .send({ counsel_name: 'John Counsel', review_date: '2026-08-17', reference: 'Matter #1', outcome: 'approved' });
-    expect(entryRes.status).toBe(201);
-
-    // Same person, now presenting a Facilitator-role token (their
-    // email is the identity dual control keys off, not the role claim).
-    const adminToken = tokenFor('facilitator', staff.email, staff.staff_id);
-    const countersignRes = await request(app)
-      .patch(`/api/v1/assets/${asset_id}/legal-attestation/${entryRes.body.attestation_id}/countersign`)
-      .set('Authorization', `Bearer ${adminToken}`)
-      .send({});
-    expect(countersignRes.status).toBe(403);
-
-    const row = await db.clients.query(`SELECT status FROM pcm_legal_attestations WHERE attestation_id = $1`, [entryRes.body.attestation_id]);
-    expect(row.rows[0].status).toBe('pending_countersign');
-  });
-
-  // Inverted 2026-08-17 (second correction): countersign widened from
-  // Facilitator-only to all three roles -- primarily Intake Officer or
-  // Program Manager in practice. The distinct-principal check is what
-  // actually protects this, not the role gate -- covered by the three
-  // tests below, one per role pairing.
-  test('a DIFFERENT Intake Officer can countersign an Intake Officer\'s entry', async () => {
-    const client_id = await fx.createClient();
-    const { asset_id } = await fx.createAsset(client_id);
-    const io1 = await staffToken('intake_officer');
-    const entryRes = await request(app)
-      .post(`/api/v1/assets/${asset_id}/legal-attestation`)
-      .set('Authorization', `Bearer ${io1.token}`)
-      .send({ counsel_name: 'X', review_date: '2026-08-17', reference: 'Y', outcome: 'approved' });
-    expect(entryRes.status).toBe(201);
-
-    const io2 = await staffToken('intake_officer');
-    const countersignRes = await request(app)
-      .patch(`/api/v1/assets/${asset_id}/legal-attestation/${entryRes.body.attestation_id}/countersign`)
-      .set('Authorization', `Bearer ${io2.token}`)
-      .send({});
-    expect(countersignRes.status).toBe(200);
-  });
-
-  test('a Program Manager can countersign an Intake Officer\'s entry', async () => {
-    const client_id = await fx.createClient();
-    const { asset_id } = await fx.createAsset(client_id);
-    const io = await staffToken('intake_officer');
-    const entryRes = await request(app)
-      .post(`/api/v1/assets/${asset_id}/legal-attestation`)
-      .set('Authorization', `Bearer ${io.token}`)
-      .send({ counsel_name: 'X', review_date: '2026-08-17', reference: 'Y', outcome: 'approved' });
-    expect(entryRes.status).toBe(201);
-
-    const pm = await staffToken('program_manager');
-    const countersignRes = await request(app)
-      .patch(`/api/v1/assets/${asset_id}/legal-attestation/${entryRes.body.attestation_id}/countersign`)
-      .set('Authorization', `Bearer ${pm.token}`)
-      .send({});
-    expect(countersignRes.status).toBe(200);
-  });
-
-  test('distinct-principal check still applies regardless of role -- the same Intake Officer cannot countersign under a different-looking token', async () => {
-    const client_id = await fx.createClient();
-    const { asset_id } = await fx.createAsset(client_id);
-    const io = await fx.createStaff({ role: 'intake_officer' });
-    const entryRes = await request(app)
-      .post(`/api/v1/assets/${asset_id}/legal-attestation`)
-      .set('Authorization', `Bearer ${tokenFor('intake_officer', io.email, io.staff_id)}`)
-      .send({ counsel_name: 'X', review_date: '2026-08-17', reference: 'Y', outcome: 'approved' });
-    expect(entryRes.status).toBe(201);
-
-    // Same person, same role -- widening countersign to Intake Officer
-    // must not accidentally widen it to "any Intake Officer including
-    // yourself."
-    const selfCountersign = await request(app)
-      .patch(`/api/v1/assets/${asset_id}/legal-attestation/${entryRes.body.attestation_id}/countersign`)
-      .set('Authorization', `Bearer ${tokenFor('intake_officer', io.email, io.staff_id)}`)
-      .send({});
-    expect(selfCountersign.status).toBe(403);
-  });
-
-  test('outcome is required and must be approved or denied -- no default, no third value', async () => {
-    const client_id = await fx.createClient();
-    const { asset_id } = await fx.createAsset(client_id);
-    const io = await staffToken('intake_officer');
-
-    const missing = await request(app)
-      .post(`/api/v1/assets/${asset_id}/legal-attestation`)
-      .set('Authorization', `Bearer ${io.token}`)
-      .send({ counsel_name: 'X', review_date: '2026-08-17', reference: 'Y' });
-    expect(missing.status).toBe(400);
-
-    const bogus = await request(app)
-      .post(`/api/v1/assets/${asset_id}/legal-attestation`)
-      .set('Authorization', `Bearer ${io.token}`)
-      .send({ counsel_name: 'X', review_date: '2026-08-17', reference: 'Y', outcome: 'maybe' });
-    expect(bogus.status).toBe(400);
+    expect(res.status).toBe(200);
+    expect(res.body.assigned_handler_staff_id).toBe(io.staff.staff_id);
+    expect(res.body.assigned_handler_role).toBe('intake_officer');
   });
 });
 
-describe('Denial — same dual control as approval, terminal only once countersigned', () => {
-  test('a denial recorded but not yet countersigned does NOT move the asset -- nothing is final on an unconfirmed single-principal claim', async () => {
+describe('kyc_verification gate — restored to its own evidence (KYC documents, POF record, OFAC status), no external attestation', () => {
+  test('all three satisfied -- no legal review of any kind required', async () => {
     const client_id = await fx.createClient();
     const { asset_id } = await fx.createAsset(client_id);
-    const io = await staffToken('intake_officer');
+    await fx.addKycDocument(client_id);
+    await fx.addPofRecord(client_id);
+    await fx.confirmOfacAttestation(client_id);
 
-    const entryRes = await request(app)
-      .post(`/api/v1/assets/${asset_id}/legal-attestation`)
-      .set('Authorization', `Bearer ${io.token}`)
-      .send({ counsel_name: 'X', review_date: '2026-08-17', reference: 'Y', outcome: 'denied' });
-    expect(entryRes.status).toBe(201);
-
-    const assetRow = await db.assets.query(`SELECT pipeline_stage FROM pcm_assets WHERE asset_id = $1`, [asset_id]);
-    expect(assetRow.rows[0].pipeline_stage).toBe('intake'); // unchanged, still pending countersign
+    const errors = await validateGate('kyc_verification', asset_id, client_id);
+    expect(errors).toEqual([]);
   });
 
-  test('countersigning a denial automatically moves the asset to rejected, via the real advancePipeline path (audit row included)', async () => {
+  test('missing POF record blocks with a plain existence message, no outcome/approve-deny vocabulary', async () => {
     const client_id = await fx.createClient();
     const { asset_id } = await fx.createAsset(client_id);
-    const io = await staffToken('intake_officer');
+    await fx.addKycDocument(client_id);
+    await fx.confirmOfacAttestation(client_id);
 
-    const entryRes = await request(app)
-      .post(`/api/v1/assets/${asset_id}/legal-attestation`)
-      .set('Authorization', `Bearer ${io.token}`)
-      .send({ counsel_name: 'X', review_date: '2026-08-17', reference: 'Denied — sanctioned jurisdiction', outcome: 'denied' });
-    expect(entryRes.status).toBe(201);
-
-    const admin = await staffToken('facilitator');
-    const countersignRes = await request(app)
-      .patch(`/api/v1/assets/${asset_id}/legal-attestation/${entryRes.body.attestation_id}/countersign`)
-      .set('Authorization', `Bearer ${admin.token}`)
-      .send({});
-    expect(countersignRes.status).toBe(200);
-    expect(countersignRes.body.auto_rejected).toBe(true);
-    expect(countersignRes.body.rejection_result.success).toBe(true);
-
-    const assetRow = await db.assets.query(`SELECT pipeline_stage FROM pcm_assets WHERE asset_id = $1`, [asset_id]);
-    expect(assetRow.rows[0].pipeline_stage).toBe('rejected');
-
-    // Real advancePipeline path, not a raw UPDATE -- proven by the same
-    // audit trail every other transition gets.
-    const history = await db.assets.query(`SELECT to_stage, transitioned_by FROM pcm_pipeline_history WHERE asset_id = $1 ORDER BY created_at DESC LIMIT 1`, [asset_id]);
-    expect(history.rows[0].to_stage).toBe('rejected');
-    expect(history.rows[0].transitioned_by).toBe(admin.staff.email);
+    const errors = await validateGate('kyc_verification', asset_id, client_id);
+    expect(errors).toEqual(expect.arrayContaining(['No Proof of Funds on file']));
   });
 
-  // Regression test for the exact interaction the countersign-widening
-  // correction created: 'rejected' is Facilitator-only in gate_roles,
-  // so a Program Manager countersigning a denial would 403 inside the
-  // internal advancePipeline() call unless that call's actor is
-  // specifically authorized around this -- see the countersign route's
-  // header comment for the fix (role-overridden synthetic actor,
-  // real identity preserved). Without that fix, this exact test is what
-  // would have failed.
-  test('a Program Manager countersigning a denial still triggers the automatic rejection (the interaction a naive countersign-widening would have broken)', async () => {
+  test('missing KYC documents blocks independently of POF/OFAC', async () => {
     const client_id = await fx.createClient();
     const { asset_id } = await fx.createAsset(client_id);
-    const io = await staffToken('intake_officer');
+    await fx.addPofRecord(client_id);
+    await fx.confirmOfacAttestation(client_id);
 
-    const entryRes = await request(app)
-      .post(`/api/v1/assets/${asset_id}/legal-attestation`)
-      .set('Authorization', `Bearer ${io.token}`)
-      .send({ counsel_name: 'X', review_date: '2026-08-17', reference: 'Denied', outcome: 'denied' });
-    expect(entryRes.status).toBe(201);
+    const errors = await validateGate('kyc_verification', asset_id, client_id);
+    expect(errors).toEqual(expect.arrayContaining(['No KYC documents on file']));
+  });
+});
 
+describe('Platform submission tracking — submission at securitization, single-principal response, DENIED archives via rejected', () => {
+  test('submission only allowed once the asset is at securitization', async () => {
+    const client_id = await fx.createClient();
+    const { asset_id } = await fx.createAsset(client_id, { pipeline_stage: 'monetization' });
     const pm = await staffToken('program_manager');
-    const countersignRes = await request(app)
-      .patch(`/api/v1/assets/${asset_id}/legal-attestation/${entryRes.body.attestation_id}/countersign`)
+    const res = await request(app)
+      .post(`/api/v1/assets/${asset_id}/platform-submission`)
       .set('Authorization', `Bearer ${pm.token}`)
       .send({});
-    expect(countersignRes.status).toBe(200);
-    expect(countersignRes.body.auto_rejected).toBe(true);
-    expect(countersignRes.body.rejection_result.success).toBe(true);
+    expect(res.status).toBe(409);
+  });
+
+  test('submission at securitization succeeds and records submitted_by/submitted_at; APPROVED response satisfies the tokenization gate', async () => {
+    const client_id = await fx.createClient();
+    const { asset_id } = await fx.createAsset(client_id, { pipeline_stage: 'securitization' });
+    await fx.addValuation(asset_id);
+    const pm = await staffToken('program_manager');
+
+    const submitRes = await request(app)
+      .post(`/api/v1/assets/${asset_id}/platform-submission`)
+      .set('Authorization', `Bearer ${pm.token}`)
+      .send({});
+    expect(submitRes.status).toBe(201);
+    expect(submitRes.body.submitted_by).toBe(pm.staff.email);
+    expect(submitRes.body.submission_id).toBeTruthy();
+
+    const beforeResponse = await validateGate('tokenization', asset_id, client_id);
+    expect(beforeResponse).toEqual(expect.arrayContaining(['Platform submission recorded but response not yet received']));
+
+    const responseRes = await request(app)
+      .post(`/api/v1/assets/${asset_id}/platform-submission/${submitRes.body.submission_id}/response`)
+      .set('Authorization', `Bearer ${pm.token}`)
+      .send({ decision: 'APPROVED' });
+    expect(responseRes.status).toBe(201);
+    expect(responseRes.body.recorded_by).toBe(pm.staff.email);
+
+    const afterResponse = await validateGate('tokenization', asset_id, client_id);
+    expect(afterResponse).toEqual([]);
+  });
+
+  test('decision is required and must be APPROVED or DENIED -- no default, no third value', async () => {
+    const client_id = await fx.createClient();
+    const { asset_id } = await fx.createAsset(client_id, { pipeline_stage: 'securitization' });
+    const pm = await staffToken('program_manager');
+    const submitRes = await request(app)
+      .post(`/api/v1/assets/${asset_id}/platform-submission`)
+      .set('Authorization', `Bearer ${pm.token}`)
+      .send({});
+
+    const missing = await request(app)
+      .post(`/api/v1/assets/${asset_id}/platform-submission/${submitRes.body.submission_id}/response`)
+      .set('Authorization', `Bearer ${pm.token}`)
+      .send({});
+    expect(missing.status).toBe(400);
+
+    const bogus = await request(app)
+      .post(`/api/v1/assets/${asset_id}/platform-submission/${submitRes.body.submission_id}/response`)
+      .set('Authorization', `Bearer ${pm.token}`)
+      .send({ decision: 'approved' }); // lowercase -- not the stored vocabulary
+    expect(bogus.status).toBe(400);
+  });
+
+  test('a submission cannot receive a second response', async () => {
+    const client_id = await fx.createClient();
+    const { asset_id } = await fx.createAsset(client_id, { pipeline_stage: 'securitization' });
+    const pm = await staffToken('program_manager');
+    const submitRes = await request(app)
+      .post(`/api/v1/assets/${asset_id}/platform-submission`)
+      .set('Authorization', `Bearer ${pm.token}`)
+      .send({});
+    await request(app)
+      .post(`/api/v1/assets/${asset_id}/platform-submission/${submitRes.body.submission_id}/response`)
+      .set('Authorization', `Bearer ${pm.token}`)
+      .send({ decision: 'APPROVED' });
+
+    const second = await request(app)
+      .post(`/api/v1/assets/${asset_id}/platform-submission/${submitRes.body.submission_id}/response`)
+      .set('Authorization', `Bearer ${pm.token}`)
+      .send({ decision: 'DENIED' });
+    expect(second.status).toBe(409);
+  });
+
+  test('DENIED archives the package by auto-moving it to rejected, via the real advancePipeline path (audit row included)', async () => {
+    const client_id = await fx.createClient();
+    const { asset_id } = await fx.createAsset(client_id, { pipeline_stage: 'securitization' });
+    const pm = await staffToken('program_manager');
+    const submitRes = await request(app)
+      .post(`/api/v1/assets/${asset_id}/platform-submission`)
+      .set('Authorization', `Bearer ${pm.token}`)
+      .send({});
+
+    const responseRes = await request(app)
+      .post(`/api/v1/assets/${asset_id}/platform-submission/${submitRes.body.submission_id}/response`)
+      .set('Authorization', `Bearer ${pm.token}`)
+      .send({ decision: 'DENIED' });
+    expect(responseRes.status).toBe(201);
+    expect(responseRes.body.auto_rejected).toBe(true);
+    expect(responseRes.body.rejection_result.success).toBe(true);
 
     const assetRow = await db.assets.query(`SELECT pipeline_stage FROM pcm_assets WHERE asset_id = $1`, [asset_id]);
     expect(assetRow.rows[0].pipeline_stage).toBe('rejected');
 
-    // Real identity preserved in the audit trail despite the role
-    // override used to pass the internal gate check.
-    const history = await db.assets.query(`SELECT to_stage, transitioned_by, transition_role FROM pcm_pipeline_history WHERE asset_id = $1 ORDER BY created_at DESC LIMIT 1`, [asset_id]);
+    const history = await db.assets.query(`SELECT to_stage, transitioned_by FROM pcm_pipeline_history WHERE asset_id = $1 ORDER BY created_at DESC LIMIT 1`, [asset_id]);
+    expect(history.rows[0].to_stage).toBe('rejected');
     expect(history.rows[0].transitioned_by).toBe(pm.staff.email);
   });
 
-  test('rejected via denial is genuinely terminal -- cannot advance back out, same as any other rejection', async () => {
+  test('rejected via platform denial is genuinely terminal -- cannot advance back out, same as any other rejection', async () => {
     const client_id = await fx.createClient();
-    const { asset_id } = await fx.createAsset(client_id);
-    const io = await staffToken('intake_officer');
-    const entryRes = await request(app)
-      .post(`/api/v1/assets/${asset_id}/legal-attestation`)
-      .set('Authorization', `Bearer ${io.token}`)
-      .send({ counsel_name: 'X', review_date: '2026-08-17', reference: 'Y', outcome: 'denied' });
-    const admin = await staffToken('facilitator');
-    await request(app)
-      .patch(`/api/v1/assets/${asset_id}/legal-attestation/${entryRes.body.attestation_id}/countersign`)
-      .set('Authorization', `Bearer ${admin.token}`)
+    const { asset_id } = await fx.createAsset(client_id, { pipeline_stage: 'securitization' });
+    const pm = await staffToken('program_manager');
+    const submitRes = await request(app)
+      .post(`/api/v1/assets/${asset_id}/platform-submission`)
+      .set('Authorization', `Bearer ${pm.token}`)
       .send({});
+    await request(app)
+      .post(`/api/v1/assets/${asset_id}/platform-submission/${submitRes.body.submission_id}/response`)
+      .set('Authorization', `Bearer ${pm.token}`)
+      .send({ decision: 'DENIED' });
 
     const bounceRes = await request(app)
       .post('/api/v1/pipeline/advance')
-      .set('Authorization', `Bearer ${admin.token}`)
-      .send({ asset_id, client_id, to_stage: 'kyc_verification' });
+      .set('Authorization', `Bearer ${pm.token}`)
+      .send({ asset_id, client_id, to_stage: 'tokenization' });
     expect(bounceRes.status).toBe(422);
     expect(bounceRes.body.error).toMatch(/Invalid stage transition/);
   });
+});
 
-  test('gate distinguishes a confirmed denial from "not yet reviewed" -- distinct message, fails closed even though this path should be unreachable in practice', async () => {
+// Explicit negative coverage for the tokenization gate, per instruction:
+// a gate that has only been observed passing is unverified. Both cases
+// exercise validateGate() directly, isolated from advancePipeline's own
+// structural-transition check (which would separately block a DENIED
+// asset from even reaching this gate in the real advance flow -- see the
+// 'genuinely terminal' test above).
+describe('tokenization gate — negative coverage: platform approval is required, not assumed', () => {
+  test('a submission with no response yet refuses the gate', async () => {
     const client_id = await fx.createClient();
     const { asset_id } = await fx.createAsset(client_id);
-    await fx.confirmLegalAttestation(client_id, asset_id, { outcome: 'denied' });
+    await fx.addValuation(asset_id);
+    await fx.createPlatformSubmission(asset_id);
 
-    const errors = await validateGate('kyc_verification', asset_id, client_id);
-    expect(errors).toEqual(expect.arrayContaining(['Legal review denied — package rejected, cannot proceed']));
+    const errors = await validateGate('tokenization', asset_id, client_id);
+    expect(errors).toEqual(expect.arrayContaining(['Platform submission recorded but response not yet received']));
   });
 
-  test('no-supersede: a second attestation attempt on an asset with a confirmed outcome is rejected, whether the first was approved or denied', async () => {
-    const client_id = await fx.createClient();
-    const { asset_id: deniedAsset } = await fx.createAsset(client_id);
-    await fx.confirmLegalAttestation(client_id, deniedAsset, { outcome: 'denied' });
-
-    const io = await staffToken('intake_officer');
-    const secondAttempt = await request(app)
-      .post(`/api/v1/assets/${deniedAsset}/legal-attestation`)
-      .set('Authorization', `Bearer ${io.token}`)
-      .send({ counsel_name: 'Y', review_date: '2026-08-17', reference: 'Z', outcome: 'approved' });
-    expect(secondAttempt.status).toBe(409);
-
-    const { asset_id: approvedAsset } = await fx.createAsset(client_id);
-    await fx.confirmLegalAttestation(client_id, approvedAsset, { outcome: 'approved' });
-    const thirdAttempt = await request(app)
-      .post(`/api/v1/assets/${approvedAsset}/legal-attestation`)
-      .set('Authorization', `Bearer ${io.token}`)
-      .send({ counsel_name: 'Y', review_date: '2026-08-17', reference: 'Z', outcome: 'approved' });
-    expect(thirdAttempt.status).toBe(409);
-  });
-
-  test('a pending (not yet confirmed) attestation does NOT block a second entry attempt -- only confirmed supersedes', async () => {
+  test('a DENIED response refuses the gate, distinctly from "no response yet"', async () => {
     const client_id = await fx.createClient();
     const { asset_id } = await fx.createAsset(client_id);
-    const io1 = await staffToken('intake_officer');
-    const first = await request(app)
-      .post(`/api/v1/assets/${asset_id}/legal-attestation`)
-      .set('Authorization', `Bearer ${io1.token}`)
-      .send({ counsel_name: 'X', review_date: '2026-08-17', reference: 'Y', outcome: 'approved' });
-    expect(first.status).toBe(201);
+    await fx.addValuation(asset_id);
+    const submissionId = await fx.createPlatformSubmission(asset_id);
+    await fx.recordPlatformResponse(submissionId, 'DENIED');
 
-    const io2 = await staffToken('intake_officer');
-    const second = await request(app)
-      .post(`/api/v1/assets/${asset_id}/legal-attestation`)
-      .set('Authorization', `Bearer ${io2.token}`)
-      .send({ counsel_name: 'X2', review_date: '2026-08-17', reference: 'Y2', outcome: 'approved' });
-    expect(second.status).toBe(201);
+    const errors = await validateGate('tokenization', asset_id, client_id);
+    expect(errors).toEqual(expect.arrayContaining(['Platform denied this submission — package cannot proceed']));
+    expect(errors).not.toContain('Platform submission recorded but response not yet received');
+  });
+
+  test('no submission at all refuses the gate', async () => {
+    const client_id = await fx.createClient();
+    const { asset_id } = await fx.createAsset(client_id);
+    await fx.addValuation(asset_id);
+
+    const errors = await validateGate('tokenization', asset_id, client_id);
+    expect(errors).toEqual(expect.arrayContaining(['No platform submission on file']));
   });
 });
 
@@ -458,7 +363,7 @@ describe('Retention floor — one-year regulatory minimum, verified against the 
     await expect(db.clients.query(`DELETE FROM pcm_clients WHERE client_id = $1`, [client_id])).resolves.not.toThrow();
   });
 
-  test('the floor also covers KYC documents, POF records, OFAC results, assets, and legal attestations -- not just clients', async () => {
+  test('the floor also covers KYC documents, POF records, OFAC results, and assets -- not just clients', async () => {
     const client_id = await fx.createClient();
     await fx.addKycDocument(client_id);
     const kycRow = await db.clients.query(`SELECT doc_id FROM pcm_kyc_documents WHERE client_id = $1`, [client_id]);
@@ -467,11 +372,6 @@ describe('Retention floor — one-year regulatory minimum, verified against the 
 
     const { asset_id } = await fx.createAsset(client_id);
     await expect(db.assets.query(`DELETE FROM pcm_assets WHERE asset_id = $1`, [asset_id]))
-      .rejects.toThrow(/Retention floor/);
-
-    await fx.confirmLegalAttestation(client_id, asset_id);
-    const attRow = await db.clients.query(`SELECT attestation_id FROM pcm_legal_attestations WHERE asset_id = $1`, [asset_id]);
-    await expect(db.clients.query(`DELETE FROM pcm_legal_attestations WHERE attestation_id = $1`, [attRow.rows[0].attestation_id]))
       .rejects.toThrow(/Retention floor/);
   });
 });
@@ -495,17 +395,11 @@ describe('Additive owner-based access — assignment adds a path, does not exclu
     await fx.confirmOfacAttestation(client_id);
 
     const assignedIo = await staffToken('intake_officer');
-    const entryRes = await request(app)
-      .post(`/api/v1/assets/${asset_id}/legal-attestation`)
+    const assignRes = await request(app)
+      .post(`/api/v1/assets/${asset_id}/assign`)
       .set('Authorization', `Bearer ${assignedIo.token}`)
-      .send({ counsel_name: 'X', review_date: '2026-08-17', reference: 'Y', outcome: 'approved' });
-    expect(entryRes.status).toBe(201);
-    const admin = await staffToken('facilitator');
-    const countersignRes = await request(app)
-      .patch(`/api/v1/assets/${asset_id}/legal-attestation/${entryRes.body.attestation_id}/countersign`)
-      .set('Authorization', `Bearer ${admin.token}`)
       .send({});
-    expect(countersignRes.status).toBe(200);
+    expect(assignRes.status).toBe(200);
 
     // Direct unit check of the assigned handler's authority, isolated
     // from the rest of advancePipeline's gate-requirements plumbing --
@@ -572,68 +466,10 @@ describe('Explicit permission sets — no inheritance between Program Manager an
   // 2026-08-17 (Intake Officer scope, third revision): "Adjustment 1: POF
   // verification stays Program Manager, not Intake Officer" is gone --
   // its entire premise (a Program-Manager-performed POF verification
-  // action) no longer exists. Replaced with tests for what it became:
-  // PATCH .../pof/:pof_id/legal-outcome, recording legal's POF decision,
-  // open to Intake Officer or Program Manager (same gate as legal-
-  // attestation entry), requiring a real attestation_id.
-  test('POF legal-outcome recording is open to Intake Officer and Program Manager, not Facilitator-only or Program-Manager-only', async () => {
-    const client_id = await fx.createClient();
-    const { asset_id } = await fx.createAsset(client_id);
-    const io = await staffToken('intake_officer');
-    const entryRes = await request(app)
-      .post(`/api/v1/assets/${asset_id}/legal-attestation`)
-      .set('Authorization', `Bearer ${io.token}`)
-      .send({ counsel_name: 'X', review_date: '2026-08-17', reference: 'Y', outcome: 'approved' });
-    expect(entryRes.status).toBe(201);
-
-    const pof = await fx.addPofRecord(client_id);
-    const pmRes = await request(app)
-      .patch(`/api/v1/clients/${client_id}/pof/${pof}/legal-outcome`)
-      .set('Authorization', `Bearer ${tokenFor('program_manager')}`)
-      .send({ outcome: 'approved', attestation_id: entryRes.body.attestation_id });
-    expect(pmRes.status).toBe(200);
-    expect(pmRes.body.outcome).toBe('approved');
-    expect(pmRes.body.attestation_id).toBe(entryRes.body.attestation_id);
-  });
-
-  test('POF legal-outcome recording rejects a missing or malformed attestation_id', async () => {
-    const client_id = await fx.createClient();
-    const pof = await fx.addPofRecord(client_id);
-    const noAttestation = await request(app)
-      .patch(`/api/v1/clients/${client_id}/pof/${pof}/legal-outcome`)
-      .set('Authorization', `Bearer ${tokenFor('intake_officer')}`)
-      .send({ outcome: 'approved' });
-    expect(noAttestation.status).toBe(400);
-
-    const fakeAttestation = await request(app)
-      .patch(`/api/v1/clients/${client_id}/pof/${pof}/legal-outcome`)
-      .set('Authorization', `Bearer ${tokenFor('intake_officer')}`)
-      .send({ outcome: 'approved', attestation_id: '00000000-0000-0000-0000-000000000000' });
-    expect(fakeAttestation.status).toBe(404);
-  });
-
-  test('POF legal-outcome recording is no-supersede, same rule as legal attestation entry', async () => {
-    const client_id = await fx.createClient();
-    const { asset_id } = await fx.createAsset(client_id);
-    const io = await staffToken('intake_officer');
-    const entryRes = await request(app)
-      .post(`/api/v1/assets/${asset_id}/legal-attestation`)
-      .set('Authorization', `Bearer ${io.token}`)
-      .send({ counsel_name: 'X', review_date: '2026-08-17', reference: 'Y', outcome: 'approved' });
-
-    const pof = await fx.addPofRecord(client_id);
-    const first = await request(app)
-      .patch(`/api/v1/clients/${client_id}/pof/${pof}/legal-outcome`)
-      .set('Authorization', `Bearer ${tokenFor('program_manager')}`)
-      .send({ outcome: 'approved', attestation_id: entryRes.body.attestation_id });
-    expect(first.status).toBe(200);
-
-    const second = await request(app)
-      .patch(`/api/v1/clients/${client_id}/pof/${pof}/legal-outcome`)
-      .set('Authorization', `Bearer ${tokenFor('program_manager')}`)
-      .send({ outcome: 'denied', attestation_id: entryRes.body.attestation_id });
-    expect(second.status).toBe(409);
-  });
+  // action) no longer exists. What it became (PATCH .../pof/:pof_id/legal-outcome)
+  // is itself removed 2026-08-24 along with legal attestation -- CoreG
+  // reviews POF itself, kyc_verification's gate checks record existence
+  // only (see the "restored to its own evidence" describe block above).
 
   // 2026-08-17 (Intake Officer scope, third revision): Adjustment 2
   // inverted -- referral-source/lead management is a different domain

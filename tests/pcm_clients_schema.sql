@@ -2,9 +2,9 @@
 -- PostgreSQL database dump
 --
 
-\restrict WdMORGDnmyBNJDE6w3lgfbDfo9w2itr7ZE1CFzTA3QdLglZ2al4CEKSVTmNKrq6
+\restrict V0TsIZye2wGixbGDGxF8dDpYO67io0iJ3M8doSvpbBV8BqZ12AuvGepMg00mMrH
 
--- Dumped from database version 15.17
+-- Dumped from database version 15.19
 -- Dumped by pg_dump version 16.14
 
 SET statement_timeout = 0;
@@ -73,7 +73,8 @@ CREATE TYPE public.pcm_user_role AS ENUM (
     'trade_group_owner',
     'program_manager',
     'intake_officer',
-    'system'
+    'system',
+    'facilitator'
 );
 
 
@@ -86,6 +87,28 @@ CREATE TYPE public.pcm_vault_status AS ENUM (
     'pending_deletion',
     'deleted'
 );
+
+
+--
+-- Name: enforce_one_year_retention(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.enforce_one_year_retention() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $_$
+DECLARE
+  age_column text := TG_ARGV[0];
+  record_created timestamptz;
+BEGIN
+  EXECUTE format('SELECT ($1).%I', age_column) INTO record_created USING OLD;
+  IF record_created > now() - interval '1 year' THEN
+    RAISE EXCEPTION 'Retention floor: % row is % old (created %), below the 1-year regulatory minimum -- deletion blocked',
+      TG_TABLE_NAME, age(now(), record_created), record_created
+      USING ERRCODE = '23514'; -- check_violation -- same class an app would get from a failed CHECK constraint
+  END IF;
+  RETURN OLD;
+END;
+$_$;
 
 
 --
@@ -607,7 +630,7 @@ CREATE TABLE public.pcm_staff (
     last_login timestamp with time zone,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT pcm_staff_role_check CHECK ((role = ANY (ARRAY['trade_group_owner'::text, 'program_manager'::text, 'intake_officer'::text])))
+    CONSTRAINT pcm_staff_role_check CHECK ((role = ANY (ARRAY['facilitator'::text, 'program_manager'::text, 'intake_officer'::text])))
 );
 
 
@@ -1260,6 +1283,34 @@ CREATE TRIGGER trg_pcm_clients_updated_at BEFORE UPDATE ON public.pcm_clients FO
 
 
 --
+-- Name: pcm_clients trg_retention_floor_pcm_clients; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER trg_retention_floor_pcm_clients BEFORE DELETE ON public.pcm_clients FOR EACH ROW EXECUTE FUNCTION public.enforce_one_year_retention('created_at');
+
+
+--
+-- Name: pcm_kyc_documents trg_retention_floor_pcm_kyc_documents; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER trg_retention_floor_pcm_kyc_documents BEFORE DELETE ON public.pcm_kyc_documents FOR EACH ROW EXECUTE FUNCTION public.enforce_one_year_retention('created_at');
+
+
+--
+-- Name: pcm_ofac_results trg_retention_floor_pcm_ofac_results; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER trg_retention_floor_pcm_ofac_results BEFORE DELETE ON public.pcm_ofac_results FOR EACH ROW EXECUTE FUNCTION public.enforce_one_year_retention('created_at');
+
+
+--
+-- Name: pcm_pof_records trg_retention_floor_pcm_pof_records; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER trg_retention_floor_pcm_pof_records BEFORE DELETE ON public.pcm_pof_records FOR EACH ROW EXECUTE FUNCTION public.enforce_one_year_retention('created_at');
+
+
+--
 -- Name: pcm_agent_activity pcm_agent_activity_client_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1455,5 +1506,5 @@ ALTER TABLE ONLY public.pcm_transactions
 -- PostgreSQL database dump complete
 --
 
-\unrestrict WdMORGDnmyBNJDE6w3lgfbDfo9w2itr7ZE1CFzTA3QdLglZ2al4CEKSVTmNKrq6
+\unrestrict V0TsIZye2wGixbGDGxF8dDpYO67io0iJ3M8doSvpbBV8BqZ12AuvGepMg00mMrH
 

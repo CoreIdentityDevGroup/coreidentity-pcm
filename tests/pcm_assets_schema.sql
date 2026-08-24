@@ -2,9 +2,9 @@
 -- PostgreSQL database dump
 --
 
-\restrict pdSbQgAnfo1Tx8q7pAnEruloWs6JA7Cu1SQ9F5g1jNh2yATRZ9IPQOlX6OOSmiv
+\restrict dJZKnt5OraYQrWsclfimTjpu3RE9f95hflleD7BzNbS1wvWGnAYhiu4eMLha83p
 
--- Dumped from database version 15.17
+-- Dumped from database version 15.19
 -- Dumped by pg_dump version 16.14
 
 SET statement_timeout = 0;
@@ -77,6 +77,28 @@ CREATE TYPE public.pcm_date_validation_status AS ENUM (
 
 
 --
+-- Name: enforce_one_year_retention(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.enforce_one_year_retention() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $_$
+DECLARE
+  age_column text := TG_ARGV[0];
+  record_created timestamptz;
+BEGIN
+  EXECUTE format('SELECT ($1).%I', age_column) INTO record_created USING OLD;
+  IF record_created > now() - interval '1 year' THEN
+    RAISE EXCEPTION 'Retention floor: % row is % old (created %), below the 1-year regulatory minimum -- deletion blocked',
+      TG_TABLE_NAME, age(now(), record_created), record_created
+      USING ERRCODE = '23514';
+  END IF;
+  RETURN OLD;
+END;
+$_$;
+
+
+--
 -- Name: pcm_asset_set_updated_at(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -139,7 +161,12 @@ CREATE TABLE public.pcm_assets (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     deleted_at timestamp with time zone,
-    instrument_integrity_status character varying(40) DEFAULT 'pending'::character varying NOT NULL
+    instrument_integrity_status character varying(40) DEFAULT 'pending'::character varying NOT NULL,
+    assigned_handler_role text,
+    assigned_handler_staff_id uuid,
+    transaction_type text,
+    CONSTRAINT pcm_assets_assigned_handler_role_check CHECK (((assigned_handler_role IS NULL) OR (assigned_handler_role = ANY (ARRAY['facilitator'::text, 'program_manager'::text, 'intake_officer'::text])))),
+    CONSTRAINT pcm_assets_transaction_type_check CHECK (((transaction_type IS NULL) OR (transaction_type = ANY (ARRAY['crypto'::text, 'cash'::text, 'asset'::text]))))
 );
 
 
@@ -244,6 +271,33 @@ CREATE TABLE public.pcm_pipeline_history (
     duration_seconds integer,
     notes text,
     created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: pcm_platform_responses; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.pcm_platform_responses (
+    response_id uuid DEFAULT gen_random_uuid() NOT NULL,
+    submission_id uuid NOT NULL,
+    decision text NOT NULL,
+    recorded_by text NOT NULL,
+    recorded_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT pcm_platform_responses_decision_check CHECK ((decision = ANY (ARRAY['APPROVED'::text, 'DENIED'::text])))
+);
+
+
+--
+-- Name: pcm_platform_submissions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.pcm_platform_submissions (
+    submission_id uuid DEFAULT gen_random_uuid() NOT NULL,
+    asset_id uuid NOT NULL,
+    submitted_by text NOT NULL,
+    submitted_at timestamp with time zone DEFAULT now() NOT NULL,
+    manifest jsonb NOT NULL
 );
 
 
@@ -379,6 +433,22 @@ ALTER TABLE ONLY public.pcm_pipeline_history
 
 
 --
+-- Name: pcm_platform_responses pcm_platform_responses_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.pcm_platform_responses
+    ADD CONSTRAINT pcm_platform_responses_pkey PRIMARY KEY (response_id);
+
+
+--
+-- Name: pcm_platform_submissions pcm_platform_submissions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.pcm_platform_submissions
+    ADD CONSTRAINT pcm_platform_submissions_pkey PRIMARY KEY (submission_id);
+
+
+--
 -- Name: pcm_schema_versions pcm_schema_versions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -406,6 +476,13 @@ CREATE INDEX idx_pcm_asset_docs_asset ON public.pcm_asset_documents USING btree 
 --
 
 CREATE INDEX idx_pcm_assets_active ON public.pcm_assets USING btree (asset_id) WHERE (deleted_at IS NULL);
+
+
+--
+-- Name: idx_pcm_assets_assigned_handler; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_pcm_assets_assigned_handler ON public.pcm_assets USING btree (assigned_handler_staff_id) WHERE (assigned_handler_staff_id IS NOT NULL);
 
 
 --
@@ -465,6 +542,20 @@ CREATE INDEX idx_pcm_pipeline_hist_client ON public.pcm_pipeline_history USING b
 
 
 --
+-- Name: idx_pcm_platform_responses_submission; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_pcm_platform_responses_submission ON public.pcm_platform_responses USING btree (submission_id);
+
+
+--
+-- Name: idx_pcm_platform_submissions_asset; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_pcm_platform_submissions_asset ON public.pcm_platform_submissions USING btree (asset_id);
+
+
+--
 -- Name: idx_pcm_tokens_asset; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -490,6 +581,13 @@ CREATE INDEX idx_pcm_valuations_date_val ON public.pcm_valuations USING btree (d
 --
 
 CREATE TRIGGER trg_pcm_assets_updated_at BEFORE UPDATE ON public.pcm_assets FOR EACH ROW EXECUTE FUNCTION public.pcm_asset_set_updated_at();
+
+
+--
+-- Name: pcm_assets trg_retention_floor_pcm_assets; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER trg_retention_floor_pcm_assets BEFORE DELETE ON public.pcm_assets FOR EACH ROW EXECUTE FUNCTION public.enforce_one_year_retention('created_at');
 
 
 --
@@ -525,6 +623,22 @@ ALTER TABLE ONLY public.pcm_pipeline_history
 
 
 --
+-- Name: pcm_platform_responses pcm_platform_responses_submission_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.pcm_platform_responses
+    ADD CONSTRAINT pcm_platform_responses_submission_id_fkey FOREIGN KEY (submission_id) REFERENCES public.pcm_platform_submissions(submission_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: pcm_platform_submissions pcm_platform_submissions_asset_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.pcm_platform_submissions
+    ADD CONSTRAINT pcm_platform_submissions_asset_id_fkey FOREIGN KEY (asset_id) REFERENCES public.pcm_assets(asset_id) ON DELETE RESTRICT;
+
+
+--
 -- Name: pcm_valuations pcm_valuations_asset_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -536,5 +650,5 @@ ALTER TABLE ONLY public.pcm_valuations
 -- PostgreSQL database dump complete
 --
 
-\unrestrict pdSbQgAnfo1Tx8q7pAnEruloWs6JA7Cu1SQ9F5g1jNh2yATRZ9IPQOlX6OOSmiv
+\unrestrict dJZKnt5OraYQrWsclfimTjpu3RE9f95hflleD7BzNbS1wvWGnAYhiu4eMLha83p
 
