@@ -23,6 +23,18 @@
 -- referencing the column (client_id-only lookups now, its only real
 -- caller before this session already went away with
 -- TransactionDocuments.jsx).
+--
+-- Wrapped in an explicit transaction (added 2026-08-24, after 0012's two
+-- failed attempts against prod exposed the risk): without BEGIN/COMMIT,
+-- each DROP/ALTER here autocommits individually, so a failure on the
+-- second or third statement would leave the first one permanently
+-- applied -- a genuinely partial, hand-fix-required state. Wrapping
+-- means any failure rolls back everything, since DDL is transactional
+-- in Postgres.
+BEGIN;
+
 DROP TABLE pcm_transaction_stages;
 ALTER TABLE pcm_documents DROP COLUMN transaction_id;
 DROP TABLE pcm_transactions;
+
+COMMIT;
