@@ -554,6 +554,61 @@ router.patch('/:id/ofac/override/:result_id/countersign', authorize('facilitator
   } catch (err) { next(err); }
 });
 
+// ─── RECORD RULES ACKNOWLEDGMENT ──────────────────────────────────────────────
+// Clients have no login -- staff record that a client acknowledged, not
+// that a client clicked something. acknowledgment_method + method_reference
+// are required: a staff assertion alone isn't evidence of what it's based
+// on. rules_version is snapshotted from pcm_rules_content's CURRENT
+// version at the moment this is recorded, not caller-supplied -- the
+// point-in-time evidence must reflect what was actually current, not
+// whatever a request body happens to claim.
+const RULE_TYPES = ['kyc_instructions', 'pof_instructions', 'rules_of_the_road'];
+const ACK_METHODS = ['signed_document', 'email_confirmation', 'verbal', 'other'];
+
+router.post('/:id/rules-acknowledgment', authorize('intake_officer', 'program_manager'), async (req, res, next) => {
+  try {
+    const { rule_type, acknowledgment_method, method_reference } = req.body;
+    if (!RULE_TYPES.includes(rule_type)) {
+      return res.status(400).json({ error: `rule_type is required and must be one of: ${RULE_TYPES.join(', ')}` });
+    }
+    if (!ACK_METHODS.includes(acknowledgment_method)) {
+      return res.status(400).json({ error: `acknowledgment_method is required and must be one of: ${ACK_METHODS.join(', ')}` });
+    }
+
+    const client = await db.clients.query(
+      `SELECT client_id FROM pcm_clients WHERE client_id = $1 AND deleted_at IS NULL`, [req.params.id]
+    );
+    if (!client.rows.length) return res.status(404).json({ error: 'Client not found' });
+
+    const rule = await db.clients.query(
+      `SELECT version FROM pcm_rules_content WHERE rule_type = $1 AND active = true`, [rule_type]
+    );
+    if (!rule.rows.length) return res.status(404).json({ error: 'Rule content not found' });
+
+    const result = await db.clients.query(
+      `INSERT INTO pcm_rules_acknowledgments
+        (client_id, rule_type, rules_version, acknowledgment_method, method_reference, recorded_by)
+       VALUES ($1,$2,$3,$4,$5,$6)
+       RETURNING *`,
+      [req.params.id, rule_type, rule.rows[0].version, acknowledgment_method,
+       method_reference || null, req.user.sub || req.user.email]
+    );
+
+    res.status(201).json(result.rows[0]);
+  } catch (err) { next(err); }
+});
+
+// ─── GET RULES ACKNOWLEDGMENTS ────────────────────────────────────────────────
+router.get('/:id/rules-acknowledgments', ownClient, async (req, res, next) => {
+  try {
+    const result = await db.clients.query(
+      `SELECT * FROM pcm_rules_acknowledgments WHERE client_id = $1 ORDER BY recorded_at DESC`,
+      [req.params.id]
+    );
+    res.json({ acknowledgments: result.rows });
+  } catch (err) { next(err); }
+});
+
 // ─── SOFT DELETE CLIENT ───────────────────────────────────────────────────────
 router.delete('/:id', authorize('facilitator'), async (req, res, next) => {
   try {

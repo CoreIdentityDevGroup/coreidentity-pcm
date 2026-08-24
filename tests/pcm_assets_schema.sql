@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict TTCTupe72mgykrjNFXCOc3aDpqEQJI4TedGEF3BuD2cXQXZaKzOH6IG2iVZxebk
+\restrict 4OCkdzNCuJythWKSh6a9nC6l1JhzIEcsg8kcMBLaEbJeQLSIfghTmbreAK4YIWw
 
 -- Dumped from database version 15.19
 -- Dumped by pg_dump version 16.14
@@ -145,7 +145,7 @@ CREATE TABLE public.pcm_asset_documents (
 CREATE TABLE public.pcm_assets (
     asset_id uuid DEFAULT gen_random_uuid() NOT NULL,
     client_id uuid NOT NULL,
-    asset_type public.pcm_asset_type NOT NULL,
+    asset_type public.pcm_asset_type,
     asset_subtype text,
     description text,
     location text,
@@ -655,5 +655,5 @@ ALTER TABLE ONLY public.pcm_valuations
 -- PostgreSQL database dump complete
 --
 
-\unrestrict TTCTupe72mgykrjNFXCOc3aDpqEQJI4TedGEF3BuD2cXQXZaKzOH6IG2iVZxebk
+\unrestrict 4OCkdzNCuJythWKSh6a9nC6l1JhzIEcsg8kcMBLaEbJeQLSIfghTmbreAK4YIWw
 

@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict Y9Of43db9OprjZeNvgaMqMGr4BQ9Oz6XwtQfGGWE6k45f6PwIKvb0Z3UE5HfSMG
+\restrict IS20fMffjVtkCeobITJ22VfnSPh8FWZM4syuwwlHMhXGKyOb2GHpY5pe8TzPzYl
 
 -- Dumped from database version 15.19
 -- Dumped by pg_dump version 16.14
@@ -494,6 +494,23 @@ CREATE TABLE public.pcm_referrers (
 
 
 --
+-- Name: pcm_rules_acknowledgments; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.pcm_rules_acknowledgments (
+    acknowledgment_id uuid DEFAULT gen_random_uuid() NOT NULL,
+    client_id uuid NOT NULL,
+    rule_type text NOT NULL,
+    rules_version integer NOT NULL,
+    acknowledgment_method text NOT NULL,
+    method_reference text,
+    recorded_by text NOT NULL,
+    recorded_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT pcm_rules_acknowledgments_acknowledgment_method_check CHECK ((acknowledgment_method = ANY (ARRAY['signed_document'::text, 'email_confirmation'::text, 'verbal'::text, 'other'::text])))
+);
+
+
+--
 -- Name: pcm_rules_content; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -849,6 +866,14 @@ ALTER TABLE ONLY public.pcm_referrers
 
 
 --
+-- Name: pcm_rules_acknowledgments pcm_rules_acknowledgments_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.pcm_rules_acknowledgments
+    ADD CONSTRAINT pcm_rules_acknowledgments_pkey PRIMARY KEY (acknowledgment_id);
+
+
+--
 -- Name: pcm_rules_content pcm_rules_content_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1104,6 +1129,13 @@ CREATE INDEX idx_pcm_referrers_type ON public.pcm_referrers USING btree (referra
 
 
 --
+-- Name: idx_pcm_rules_acknowledgments_client; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_pcm_rules_acknowledgments_client ON public.pcm_rules_acknowledgments USING btree (client_id);
+
+
+--
 -- Name: idx_pcm_sdn_aliases_canonical; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -1328,6 +1360,22 @@ ALTER TABLE ONLY public.pcm_referral_commissions
 
 
 --
+-- Name: pcm_rules_acknowledgments pcm_rules_acknowledgments_client_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.pcm_rules_acknowledgments
+    ADD CONSTRAINT pcm_rules_acknowledgments_client_id_fkey FOREIGN KEY (client_id) REFERENCES public.pcm_clients(client_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: pcm_rules_acknowledgments pcm_rules_acknowledgments_rule_type_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.pcm_rules_acknowledgments
+    ADD CONSTRAINT pcm_rules_acknowledgments_rule_type_fkey FOREIGN KEY (rule_type) REFERENCES public.pcm_rules_content(rule_type);
+
+
+--
 -- Name: pcm_sdn_aliases pcm_sdn_aliases_entry_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1355,5 +1403,5 @@ ALTER TABLE ONLY public.pcm_sdn_entries
 -- PostgreSQL database dump complete
 --
 
-\unrestrict Y9Of43db9OprjZeNvgaMqMGr4BQ9Oz6XwtQfGGWE6k45f6PwIKvb0Z3UE5HfSMG
+\unrestrict IS20fMffjVtkCeobITJ22VfnSPh8FWZM4syuwwlHMhXGKyOb2GHpY5pe8TzPzYl
 

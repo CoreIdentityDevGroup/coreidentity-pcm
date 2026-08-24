@@ -53,25 +53,55 @@ router.get('/:id', ownAsset, async (req, res, next) => {
 });
 
 // ─── CREATE ASSET ─────────────────────────────────────────────────────────────
+// asset_type (enum) and asset_type_id (FK toward pcm_asset_types,
+// migration 0022) are a dual-write pair with NO mapping between them
+// (see 0022's header) -- both optional now (migration 0025 dropped the
+// enum's NOT NULL), neither forced. Not requiring at least one, on
+// purpose: a crypto or cash transaction_type genuinely has no asset
+// type in either vocabulary -- forcing a value here would mean
+// inventing one.
+// asset_backing_id/instrument_id/asset_type_id are all cross-database
+// plain uuids (pcm_asset_backings/pcm_securities_instruments/
+// pcm_asset_types live in pcm_clients, pcm_assets lives in pcm_assets)
+// and are validated for existence here the same way bank_id is
+// validated in the bank-assignment route below.
 router.post('/', authorize('program_manager'), async (req, res, next) => {
   try {
-    const { client_id, asset_type, asset_subtype, description,
-            location, declared_value, currency, notes } = req.body;
+    const { client_id, asset_type, asset_type_id, asset_subtype, description,
+            location, declared_value, currency, notes,
+            asset_backing_id, instrument_id, instrument_description, transaction_type } = req.body;
 
-    if (!client_id || !asset_type) {
-      return res.status(400).json({ error: 'client_id and asset_type are required' });
+    if (!client_id) {
+      return res.status(400).json({ error: 'client_id is required' });
+    }
+
+    for (const [field, table, pk] of [
+      [asset_type_id, 'pcm_asset_types', 'asset_type_id'],
+      [asset_backing_id, 'pcm_asset_backings', 'backing_id'],
+      [instrument_id, 'pcm_securities_instruments', 'instrument_id']
+    ]) {
+      if (field) {
+        const refCheck = await db.clients.query(
+          `SELECT 1 FROM ${table} WHERE ${pk} = $1 AND active = true`, [field]
+        );
+        if (!refCheck.rows.length) {
+          return res.status(400).json({ error: `${pk} does not match an active row in ${table}` });
+        }
+      }
     }
 
     const ref = `PCM-${Date.now()}-${Math.random().toString(36).substr(2,6).toUpperCase()}`;
 
     const result = await db.assets.query(
       `INSERT INTO pcm_assets
-        (client_id, asset_type, asset_subtype, description,
-         location, declared_value, currency, pipeline_reference, notes)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+        (client_id, asset_type, asset_type_id, asset_subtype, description,
+         location, declared_value, currency, pipeline_reference, notes,
+         asset_backing_id, instrument_id, instrument_description, transaction_type)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
        RETURNING *`,
-      [client_id, asset_type, asset_subtype, description,
-       location, declared_value, currency || 'USD', ref, notes]
+      [client_id, asset_type || null, asset_type_id || null, asset_subtype, description,
+       location, declared_value, currency || 'USD', ref, notes,
+       asset_backing_id || null, instrument_id || null, instrument_description || null, transaction_type || null]
     );
 
     await db.assets.query(
