@@ -149,6 +149,15 @@ async function setBankAssignment(asset_id, bank = 'Test Bank NA') {
   );
 }
 
+async function createRefBank(overrides = {}) {
+  const name = overrides.name || `Test Bank ${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+  const result = await db.clients.query(
+    `INSERT INTO pcm_banks (name, active) VALUES ($1, $2) RETURNING bank_id, name, active`,
+    [name, overrides.active !== undefined ? overrides.active : true]
+  );
+  return result.rows[0];
+}
+
 async function addExecutedAgreement(asset_id, client_id, pipeline_reference, agreement_type) {
   await db.forms.query(
     `INSERT INTO pcm_agreements
@@ -197,5 +206,5 @@ module.exports = {
   createClient, createAsset, addKycDocument, addPofRecord, confirmOfacAttestation,
   createPlatformSubmission, recordPlatformResponse, confirmPlatformApproval,
   addValuation, addAssetDocument, setInstrumentIntegrityVerified,
-  setBankAssignment, addExecutedAgreement, mintClassificationToken, createStaff
+  setBankAssignment, createRefBank, addExecutedAgreement, mintClassificationToken, createStaff
 };
