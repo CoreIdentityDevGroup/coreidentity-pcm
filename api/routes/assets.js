@@ -7,8 +7,9 @@ const { requireOwnClientOrStaff } = require('../middleware/ownership');
 const router   = express.Router();
 
 // Client-linked GET routes below take asset_id from the path and look up its
-// owning client_id. Matches the ownership check already established in
-// transactions.js's acknowledge-rules route.
+// owning client_id, so a client-role token scoped to a different client_id
+// gets 403'd by requireOwnClientOrStaff rather than reading another
+// client's asset.
 const ownAsset = requireOwnClientOrStaff(async req => {
   const r = await db.assets.query(
     `SELECT client_id FROM pcm_assets WHERE asset_id = $1 AND deleted_at IS NULL`,
@@ -22,8 +23,7 @@ router.get('/', async (req, res, next) => {
   try {
     const { asset_type, pipeline_stage, limit = 50, offset = 0 } = req.query;
     // Client-role tokens are always scoped to their own client_id, regardless
-    // of any client_id passed in the query string -- same fix as
-    // transactions.js's LIST route.
+    // of any client_id passed in the query string.
     const client_id = req.user?.role === 'client' ? req.user.client_id : req.query.client_id;
     let query = `SELECT * FROM pcm_assets WHERE deleted_at IS NULL`;
     const params = [];

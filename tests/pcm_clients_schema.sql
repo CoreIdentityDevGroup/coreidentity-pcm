@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict V0TsIZye2wGixbGDGxF8dDpYO67io0iJ3M8doSvpbBV8BqZ12AuvGepMg00mMrH
+\restrict Y9Of43db9OprjZeNvgaMqMGr4BQ9Oz6XwtQfGGWE6k45f6PwIKvb0Z3UE5HfSMG
 
 -- Dumped from database version 15.19
 -- Dumped by pg_dump version 16.14
@@ -305,7 +305,6 @@ CREATE TABLE public.pcm_deletion_certificates (
 CREATE TABLE public.pcm_documents (
     document_id uuid DEFAULT gen_random_uuid() NOT NULL,
     client_id uuid,
-    transaction_id uuid,
     document_type character varying(100),
     file_name character varying(500) NOT NULL,
     file_size_bytes integer,
@@ -635,55 +634,6 @@ CREATE TABLE public.pcm_staff (
 
 
 --
--- Name: pcm_transaction_stages; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.pcm_transaction_stages (
-    stage_id uuid DEFAULT gen_random_uuid() NOT NULL,
-    transaction_id uuid NOT NULL,
-    stage_number integer NOT NULL,
-    status character varying(50) DEFAULT 'pending'::character varying,
-    notes text,
-    completed_at timestamp with time zone,
-    created_at timestamp with time zone DEFAULT now(),
-    updated_at timestamp with time zone DEFAULT now(),
-    CONSTRAINT pcm_transaction_stages_stage_number_check CHECK (((stage_number >= 1) AND (stage_number <= 8))),
-    CONSTRAINT pcm_transaction_stages_status_check CHECK (((status)::text = ANY (ARRAY[('pending'::character varying)::text, ('in_progress'::character varying)::text, ('completed'::character varying)::text, ('skipped'::character varying)::text, ('not_applicable'::character varying)::text])))
-);
-
-
---
--- Name: pcm_transactions; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.pcm_transactions (
-    transaction_id uuid DEFAULT gen_random_uuid() NOT NULL,
-    client_id uuid NOT NULL,
-    transaction_type character varying(50) NOT NULL,
-    crypto_wallet_address text,
-    crypto_wallet_link text,
-    asset_type_id uuid,
-    asset_description text,
-    asset_backing_id uuid,
-    instrument_id uuid,
-    instrument_description text,
-    bank_id uuid,
-    asset_jurisdiction text,
-    asset_location text,
-    owner_name text,
-    beneficiary_same_as_owner boolean DEFAULT true,
-    beneficiary_name text,
-    been_in_trade_before boolean DEFAULT false,
-    rules_acknowledged boolean DEFAULT false,
-    rules_acknowledged_at timestamp with time zone,
-    status character varying(50) DEFAULT 'active'::character varying,
-    created_at timestamp with time zone DEFAULT now(),
-    updated_at timestamp with time zone DEFAULT now(),
-    CONSTRAINT pcm_transactions_transaction_type_check CHECK (((transaction_type)::text = ANY (ARRAY[('crypto'::character varying)::text, ('cash'::character varying)::text, ('asset'::character varying)::text])))
-);
-
-
---
 -- Name: pcm_schema_versions version_id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -979,30 +929,6 @@ ALTER TABLE ONLY public.pcm_staff
 
 
 --
--- Name: pcm_transaction_stages pcm_transaction_stages_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pcm_transaction_stages
-    ADD CONSTRAINT pcm_transaction_stages_pkey PRIMARY KEY (stage_id);
-
-
---
--- Name: pcm_transaction_stages pcm_transaction_stages_transaction_id_stage_number_key; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pcm_transaction_stages
-    ADD CONSTRAINT pcm_transaction_stages_transaction_id_stage_number_key UNIQUE (transaction_id, stage_number);
-
-
---
--- Name: pcm_transactions pcm_transactions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pcm_transactions
-    ADD CONSTRAINT pcm_transactions_pkey PRIMARY KEY (transaction_id);
-
-
---
 -- Name: idx_agent_activity_agent; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -1098,13 +1024,6 @@ CREATE INDEX idx_pcm_deletion_certs_client ON public.pcm_deletion_certificates U
 --
 
 CREATE INDEX idx_pcm_documents_client ON public.pcm_documents USING btree (client_id);
-
-
---
--- Name: idx_pcm_documents_transaction; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_pcm_documents_transaction ON public.pcm_documents USING btree (transaction_id);
 
 
 --
@@ -1262,20 +1181,6 @@ CREATE INDEX idx_pcm_staff_email ON public.pcm_staff USING btree (email) WHERE (
 
 
 --
--- Name: idx_pcm_transaction_stages_transaction; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_pcm_transaction_stages_transaction ON public.pcm_transaction_stages USING btree (transaction_id);
-
-
---
--- Name: idx_pcm_transactions_client; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_pcm_transactions_client ON public.pcm_transactions USING btree (client_id);
-
-
---
 -- Name: pcm_clients trg_pcm_clients_updated_at; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -1356,14 +1261,6 @@ ALTER TABLE ONLY public.pcm_deletion_certificates
 
 ALTER TABLE ONLY public.pcm_documents
     ADD CONSTRAINT pcm_documents_client_id_fkey FOREIGN KEY (client_id) REFERENCES public.pcm_clients(client_id);
-
-
---
--- Name: pcm_documents pcm_documents_transaction_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pcm_documents
-    ADD CONSTRAINT pcm_documents_transaction_id_fkey FOREIGN KEY (transaction_id) REFERENCES public.pcm_transactions(transaction_id);
 
 
 --
@@ -1455,56 +1352,8 @@ ALTER TABLE ONLY public.pcm_sdn_entries
 
 
 --
--- Name: pcm_transaction_stages pcm_transaction_stages_transaction_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pcm_transaction_stages
-    ADD CONSTRAINT pcm_transaction_stages_transaction_id_fkey FOREIGN KEY (transaction_id) REFERENCES public.pcm_transactions(transaction_id);
-
-
---
--- Name: pcm_transactions pcm_transactions_asset_backing_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pcm_transactions
-    ADD CONSTRAINT pcm_transactions_asset_backing_id_fkey FOREIGN KEY (asset_backing_id) REFERENCES public.pcm_asset_backings(backing_id);
-
-
---
--- Name: pcm_transactions pcm_transactions_asset_type_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pcm_transactions
-    ADD CONSTRAINT pcm_transactions_asset_type_id_fkey FOREIGN KEY (asset_type_id) REFERENCES public.pcm_asset_types(asset_type_id);
-
-
---
--- Name: pcm_transactions pcm_transactions_bank_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pcm_transactions
-    ADD CONSTRAINT pcm_transactions_bank_id_fkey FOREIGN KEY (bank_id) REFERENCES public.pcm_banks(bank_id);
-
-
---
--- Name: pcm_transactions pcm_transactions_client_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pcm_transactions
-    ADD CONSTRAINT pcm_transactions_client_id_fkey FOREIGN KEY (client_id) REFERENCES public.pcm_clients(client_id);
-
-
---
--- Name: pcm_transactions pcm_transactions_instrument_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pcm_transactions
-    ADD CONSTRAINT pcm_transactions_instrument_id_fkey FOREIGN KEY (instrument_id) REFERENCES public.pcm_securities_instruments(instrument_id);
-
-
---
 -- PostgreSQL database dump complete
 --
 
-\unrestrict V0TsIZye2wGixbGDGxF8dDpYO67io0iJ3M8doSvpbBV8BqZ12AuvGepMg00mMrH
+\unrestrict Y9Of43db9OprjZeNvgaMqMGr4BQ9Oz6XwtQfGGWE6k45f6PwIKvb0Z3UE5HfSMG
 
