@@ -15,12 +15,26 @@
 -- can't be retroactively rewritten, so the bridge has to be at
 -- authorization-check time. See authorize.js's header comment for the
 -- removal condition/date.
+--
+-- Statement order below was originally UPDATE-then-constraint, which is
+-- wrong: pcm_staff_role_check only permitted the old three role values,
+-- so the UPDATE violated its own table's constraint before the ALTER
+-- TABLE loosening it ever ran. Found live on first apply attempt
+-- (2026-08-24, prod), nothing was applied since the UPDATE's failure
+-- rolled back cleanly. Fix: loosen the constraint first, then write the
+-- data. Confirmed safe to keep ALTER TYPE ... ADD VALUE in the same
+-- transaction as the UPDATE on Postgres 15.17 (prod's version) -- the
+-- post-PG12 restriction only blocks *using* a newly added enum value in
+-- the transaction that added it, and nothing here does that (pcm_staff.role
+-- is plain text, not the enum).
 
-UPDATE pcm_staff SET role = 'facilitator' WHERE role = 'trade_group_owner';
+BEGIN;
 
 ALTER TABLE pcm_staff DROP CONSTRAINT pcm_staff_role_check;
 ALTER TABLE pcm_staff ADD CONSTRAINT pcm_staff_role_check
   CHECK (role = ANY (ARRAY['facilitator'::text, 'program_manager'::text, 'intake_officer'::text]));
+
+UPDATE pcm_staff SET role = 'facilitator' WHERE role = 'trade_group_owner';
 
 -- pcm_user_role: a SEPARATE role representation from pcm_staff.role
 -- (text + CHECK, fixed above) -- a genuine Postgres ENUM type, used only
@@ -39,3 +53,5 @@ ALTER TABLE pcm_staff ADD CONSTRAINT pcm_staff_role_check
 -- value) -- remove it in the same follow-up as authorize.js's
 -- ROLE_ALIAS once every pre-deploy token has expired.
 ALTER TYPE pcm_user_role ADD VALUE IF NOT EXISTS 'facilitator';
+
+COMMIT;
