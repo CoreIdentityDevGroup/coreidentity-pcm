@@ -1,0 +1,35 @@
+-- Phase B (2026-08-24): the instrument concept, resolved as a nullable
+-- column on pcm_assets, not its own table. Run against the pcm_assets
+-- database. pcm_assets has zero rows -- purely additive, no backfill.
+--
+-- DECISION, reported and confirmed before implementing: instrument is a
+-- static attribute of the asset (chosen once, at classification time),
+-- not a per-asset event -- unlike pcm_bank_assignments, which logs an
+-- actor's action (assigned_by/assigned_at/assignment_basis/notes) at its
+-- own gated pipeline stage and can plausibly be redone. Evidence for this:
+--   - pcm_securities_instruments (MTN, SBLC, 144A, Other) is shaped like
+--     pcm_asset_types (a flat classification catalog with a
+--     requires_description flag), not like an operational log.
+--   - The retired pcm_transactions table already modeled it this way --
+--     instrument_id + instrument_description sat directly on the row,
+--     with no separate history table, even though that same table also
+--     relied on pcm_bank_assignments for bank history.
+--   - Nothing in STAGES/GATE_REQUIREMENTS (api/services/pipeline.js)
+--     gates on "instrument" the way bank_assignment gates on a bank; the
+--     wizard's Securities step is filled in once at intake.
+--
+-- Plain uuid, NOT a foreign key -- pcm_securities_instruments lives in
+-- the pcm_clients database (same cross-database reasoning as 0020).
+--
+-- instrument_description mirrors pcm_securities_instruments'
+-- requires_description flag (set on the 'Other' row) -- same pattern as
+-- the retired pcm_transactions.instrument_description.
+--
+-- NAMING COLLISION, flagged for whoever reads this next: pcm_asset_type
+-- (the enum on this same table, see 0022) has a value literally named
+-- 'sblc'. pcm_securities_instruments has an entry named 'SBLC'. Same
+-- word, two unrelated fields -- an asset TYPE classification versus an
+-- instrument TYPE classification. Do not conflate them; this migration
+-- does not attempt to reconcile or deduplicate the vocabularies.
+ALTER TABLE pcm_assets ADD COLUMN instrument_id uuid;
+ALTER TABLE pcm_assets ADD COLUMN instrument_description text;

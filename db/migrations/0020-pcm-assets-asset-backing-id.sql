@@ -1,0 +1,14 @@
+-- Phase B (2026-08-24): wire pcm_asset_backings to pcm_assets. Run against
+-- the pcm_assets database. pcm_assets has zero rows -- purely additive,
+-- no backfill.
+--
+-- Plain uuid, NOT a foreign key: pcm_asset_backings lives in the
+-- pcm_clients database, pcm_assets lives in pcm_assets -- Postgres has no
+-- cross-database foreign keys. Same reason pcm_assets.client_id already
+-- has no FK to pcm_clients (see db/migrations/0013's header for the
+-- precedent). Referential integrity is application-enforced only.
+--
+-- Nullable: most assets won't have a backing selected until Phase C's
+-- wizard repoint actually writes to this column (POST /assets's
+-- WRITABLE_FIELDS, not touched in this migration).
+ALTER TABLE pcm_assets ADD COLUMN asset_backing_id uuid;

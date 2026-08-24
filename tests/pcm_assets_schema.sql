@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict jLMgFmrTt9uPOaBUvb2Pem4nIf04C10uHcpe8p4NiiHva0TQrcArxcebziwcXa0
+\restrict TTCTupe72mgykrjNFXCOc3aDpqEQJI4TedGEF3BuD2cXQXZaKzOH6IG2iVZxebk
 
 -- Dumped from database version 15.19
 -- Dumped by pg_dump version 16.14
@@ -165,6 +165,10 @@ CREATE TABLE public.pcm_assets (
     assigned_handler_role text,
     assigned_handler_staff_id uuid,
     transaction_type text,
+    asset_backing_id uuid,
+    instrument_id uuid,
+    instrument_description text,
+    asset_type_id uuid,
     CONSTRAINT pcm_assets_assigned_handler_role_check CHECK (((assigned_handler_role IS NULL) OR (assigned_handler_role = ANY (ARRAY['facilitator'::text, 'program_manager'::text, 'intake_officer'::text])))),
     CONSTRAINT pcm_assets_transaction_type_check CHECK (((transaction_type IS NULL) OR (transaction_type = ANY (ARRAY['crypto'::text, 'cash'::text, 'asset'::text]))))
 );
@@ -185,7 +189,8 @@ CREATE TABLE public.pcm_bank_assignments (
     assigned_by text NOT NULL,
     assigned_at timestamp with time zone DEFAULT now() NOT NULL,
     notes text,
-    created_at timestamp with time zone DEFAULT now() NOT NULL
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    bank_id uuid
 );
 
 
@@ -650,5 +655,5 @@ ALTER TABLE ONLY public.pcm_valuations
 -- PostgreSQL database dump complete
 --
 
-\unrestrict jLMgFmrTt9uPOaBUvb2Pem4nIf04C10uHcpe8p4NiiHva0TQrcArxcebziwcXa0
+\unrestrict TTCTupe72mgykrjNFXCOc3aDpqEQJI4TedGEF3BuD2cXQXZaKzOH6IG2iVZxebk
 

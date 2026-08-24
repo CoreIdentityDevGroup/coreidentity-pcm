@@ -383,13 +383,27 @@ router.get('/:id/token', ownAsset, async (req, res, next) => {
 });
 
 // ─── ASSIGN TRADER BANK ───────────────────────────────────────────────────────
+// Phase B (2026-08-24): bank_id is optional, additive alongside the
+// existing free-text fields (see db/migrations/0023's header for why
+// those aren't replaced). Validated against pcm_banks when provided --
+// pcm_banks lives in the pcm_clients database (cross-database, no real
+// FK possible), so this is the one place that check can happen.
 router.post('/:id/bank-assignment', authorize('program_manager'), async (req, res, next) => {
   try {
-    const { bank_name, bank_jurisdiction, bank_swift_code,
+    const { bank_id, bank_name, bank_jurisdiction, bank_swift_code,
             assignment_basis, notes } = req.body;
 
     if (!bank_name || !bank_jurisdiction) {
       return res.status(400).json({ error: 'bank_name and bank_jurisdiction are required' });
+    }
+
+    if (bank_id) {
+      const bank = await db.clients.query(
+        `SELECT bank_id FROM pcm_banks WHERE bank_id = $1 AND active = true`, [bank_id]
+      );
+      if (!bank.rows.length) {
+        return res.status(400).json({ error: 'bank_id does not match an active bank in the reference list' });
+      }
     }
 
     const asset = await db.assets.query(
@@ -405,11 +419,11 @@ router.post('/:id/bank-assignment', authorize('program_manager'), async (req, re
 
     const result = await db.assets.query(
       `INSERT INTO pcm_bank_assignments
-        (asset_id, client_id, bank_name, bank_jurisdiction,
+        (asset_id, client_id, bank_id, bank_name, bank_jurisdiction,
          bank_swift_code, assignment_basis, assigned_by, notes)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
        RETURNING *`,
-      [req.params.id, asset.rows[0].client_id, bank_name, bank_jurisdiction,
+      [req.params.id, asset.rows[0].client_id, bank_id || null, bank_name, bank_jurisdiction,
        bank_swift_code, assignment_basis, req.user.sub || 'system', notes]
     );
 
