@@ -65,7 +65,7 @@ router.get('/:id', ownAsset, async (req, res, next) => {
 // pcm_asset_types live in pcm_clients, pcm_assets lives in pcm_assets)
 // and are validated for existence here the same way bank_id is
 // validated in the bank-assignment route below.
-router.post('/', authorize('program_manager'), async (req, res, next) => {
+router.post('/', authorize('facilitator','program_manager','intake_officer'), async (req, res, next) => {
   try {
     const { client_id, asset_type, asset_type_id, asset_subtype, description,
             location, declared_value, currency, notes,
@@ -157,7 +157,7 @@ router.post('/', authorize('program_manager'), async (req, res, next) => {
 });
 
 // ─── UPDATE ASSET ─────────────────────────────────────────────────────────────
-router.patch('/:id', authorize('program_manager'), async (req, res, next) => {
+router.patch('/:id', authorize('facilitator','program_manager','intake_officer'), async (req, res, next) => {
   try {
     const allowed = ['asset_subtype','description','location','declared_value',
                      'currency','bank_assignment','bank_swift_code','notes'];
@@ -191,7 +191,7 @@ router.patch('/:id', authorize('program_manager'), async (req, res, next) => {
 // call — a second, unguarded path to the same transition that
 // POST /api/v1/pipeline/advance already gates. Route kept (not deleted) so
 // a caller gets 410 Gone instead of a 404 that could pass for a typo.
-router.post('/:id/advance', authorize('program_manager'), (req, res) => {
+router.post('/:id/advance', authorize('facilitator','program_manager','intake_officer'), (req, res) => {
   res.status(410).json({
     error:       'Gone',
     message:     'This endpoint no longer advances pipeline stage. It performed no role-authority, gate, or Sentinel checks. Use POST /api/v1/pipeline/advance instead.',
@@ -267,7 +267,7 @@ router.get('/:id/valuations', ownAsset, async (req, res, next) => {
 });
 
 // ─── SUBMIT VALUATION (with same-date enforcement) ────────────────────────────
-router.post('/:id/valuations', authorize('program_manager'), async (req, res, next) => {
+router.post('/:id/valuations', authorize('facilitator','program_manager','intake_officer'), async (req, res, next) => {
   try {
     const { appraised_value, currency, appraiser_name, appraiser_organization,
             appraiser_license, appraisal_date, submission_date,
@@ -373,7 +373,7 @@ router.get('/:id/documents', ownAsset, async (req, res, next) => {
 });
 
 // ─── REGISTER SUPPORTING DOCUMENT ────────────────────────────────────────────
-router.post('/:id/documents', authorize('program_manager'), async (req, res, next) => {
+router.post('/:id/documents', authorize('facilitator','program_manager','intake_officer'), async (req, res, next) => {
   try {
     const { doc_type, doc_subtype, file_name, file_size_bytes,
             content_type, submission_date, gcs_bucket, gcs_object_path } = req.body;
@@ -418,7 +418,7 @@ router.get('/:id/token', ownAsset, async (req, res, next) => {
 // those aren't replaced). Validated against pcm_banks when provided --
 // pcm_banks lives in the pcm_clients database (cross-database, no real
 // FK possible), so this is the one place that check can happen.
-router.post('/:id/bank-assignment', authorize('program_manager'), async (req, res, next) => {
+router.post('/:id/bank-assignment', authorize('facilitator','program_manager','intake_officer'), async (req, res, next) => {
   try {
     const { bank_id, bank_name, bank_jurisdiction, bank_swift_code,
             assignment_basis, notes } = req.body;
@@ -487,7 +487,7 @@ router.get('/:id/bank-assignments', ownAsset, async (req, res, next) => {
 // (db/migrations/0013). The stored role is descriptive only; ownership
 // authority is decided by staff_id match in checkRoleAuthority, not this
 // value.
-router.post('/:id/assign', authorize('intake_officer', 'program_manager'), async (req, res, next) => {
+router.post('/:id/assign', authorize('facilitator','program_manager','intake_officer'), async (req, res, next) => {
   try {
     const asset = await db.assets.query(
       `SELECT asset_id FROM pcm_assets WHERE asset_id = $1 AND deleted_at IS NULL`,
@@ -553,7 +553,7 @@ async function buildSubmissionManifest(asset_id, client_id) {
   };
 }
 
-router.post('/:id/platform-submission', authorize('program_manager'), async (req, res, next) => {
+router.post('/:id/platform-submission', authorize('facilitator','program_manager','intake_officer'), async (req, res, next) => {
   try {
     const asset = await db.assets.query(
       `SELECT asset_id, client_id, pipeline_stage FROM pcm_assets WHERE asset_id = $1 AND deleted_at IS NULL`,
@@ -604,7 +604,7 @@ router.get('/:id/platform-submissions', ownAsset, async (req, res, next) => {
 // pcm_pipeline_history, and the reason a package died is already fully
 // captured in pcm_platform_responses + the transition notes below, same
 // pattern the removed legal-attestation-denial auto-reject used).
-router.post('/:id/platform-submission/:submission_id/response', authorize('program_manager'), async (req, res, next) => {
+router.post('/:id/platform-submission/:submission_id/response', authorize('facilitator','program_manager','intake_officer'), async (req, res, next) => {
   try {
     const { decision } = req.body;
     if (decision !== 'APPROVED' && decision !== 'DENIED') {

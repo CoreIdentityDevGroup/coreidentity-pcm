@@ -85,7 +85,7 @@ router.get('/status/:asset_id', ownAssetId, async (req, res, next) => {
 // never pass this outer authorize() at all. Claiming a package
 // (POST /assets/:id/assign) stays with Intake Officer; moving the deal
 // forward to the next stage does not.
-router.post('/advance', authorize('facilitator','program_manager'), async (req, res, next) => {
+router.post('/advance', authorize('facilitator','program_manager','intake_officer'), async (req, res, next) => {
   try {
     const { asset_id, client_id, to_stage, notes } = req.body;
 
@@ -180,7 +180,7 @@ router.post('/reject', authorize('facilitator'), async (req, res, next) => {
 // ─── VERIFY INSTRUMENT INTEGRITY (human-review confirmation) ─────────────────
 // CLOSE-GAP-04: the ONLY path permitted to set instrument_integrity_status
 // to 'verified'. The instrument-integrity agent cannot self-clear this status.
-router.post('/verify-instrument', authorize('program_manager'), async (req, res, next) => {
+router.post('/verify-instrument', authorize('facilitator','program_manager','intake_officer'), async (req, res, next) => {
   try {
     const { asset_id, client_id, decision, verification_channel_note } = req.body;
 
@@ -263,7 +263,7 @@ router.post('/verify-instrument', authorize('program_manager'), async (req, res,
 });
 
 // ─── HOLD ASSET ───────────────────────────────────────────────────────────────
-router.post('/hold', authorize('program_manager'), async (req, res, next) => {
+router.post('/hold', authorize('facilitator','program_manager','intake_officer'), async (req, res, next) => {
   try {
     const { asset_id, client_id, notes } = req.body;
     if (!asset_id || !client_id) {
@@ -284,7 +284,7 @@ router.post('/hold', authorize('program_manager'), async (req, res, next) => {
 // was on immediately before being held, reconstructed from
 // pcm_pipeline_history. advancePipeline()'s own isValidTransition() check
 // re-verifies this independently rather than trusting the lookup here.
-router.post('/resume', authorize('program_manager'), async (req, res, next) => {
+router.post('/resume', authorize('facilitator','program_manager','intake_officer'), async (req, res, next) => {
   try {
     const { asset_id, client_id, notes } = req.body;
     if (!asset_id || !client_id) {

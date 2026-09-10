@@ -14,7 +14,7 @@ const ownClient = requireOwnClientOrStaff(req => req.params.id);
 // Staff-only: a multi-client listing has no legitimate use for a client-role
 // token (their own record is available via GET /:id). Same staff-role tuple
 // already used for POST/PATCH on this resource, not a new boundary.
-router.get('/', authorize('intake_officer'), async (req, res, next) => {
+router.get('/', authorize('facilitator','program_manager','intake_officer'), async (req, res, next) => {
   try {
     const { stage, assigned_to, country, limit = 50, offset = 0 } = req.query;
     let query = `SELECT * FROM pcm_clients WHERE deleted_at IS NULL`;
@@ -46,7 +46,7 @@ router.get('/:id', ownClient, async (req, res, next) => {
 });
 
 // ─── CREATE CLIENT ────────────────────────────────────────────────────────────
-router.post('/', authorize('intake_officer'), async (req, res, next) => {
+router.post('/', authorize('facilitator','program_manager','intake_officer'), async (req, res, next) => {
   try {
     const {
       full_name, email, phone, country_of_origin, jurisdiction,
@@ -107,7 +107,7 @@ router.post('/', authorize('intake_officer'), async (req, res, next) => {
 });
 
 // ─── UPDATE CLIENT ────────────────────────────────────────────────────────────
-router.patch('/:id', authorize('intake_officer'), async (req, res, next) => {
+router.patch('/:id', authorize('facilitator','program_manager','intake_officer'), async (req, res, next) => {
   try {
     const allowed = ['full_name','email','phone','country_of_origin','jurisdiction',
                      'referral_source','referral_contact','notes',
@@ -153,7 +153,7 @@ router.patch('/:id', authorize('intake_officer'), async (req, res, next) => {
 // leaving it listed here would misrepresent Intake Officer's actual scope
 // to anyone grepping authorize() calls, and this stub still points
 // callers at the real advance route below, which no longer accepts them.
-router.post('/:id/advance', authorize('facilitator', 'program_manager'), (req, res) => {
+router.post('/:id/advance', authorize('facilitator','program_manager','intake_officer'), (req, res) => {
   res.status(410).json({
     error:       'Gone',
     message:     'This endpoint no longer advances pipeline stage. It performed no role-hierarchy, gate, or Sentinel checks, and never accepted the asset_id the guarded path requires. Use POST /api/v1/pipeline/advance instead.',
@@ -189,7 +189,7 @@ router.get('/:id/kyc', ownClient, async (req, res, next) => {
 });
 
 // ─── REGISTER KYC DOCUMENT (metadata only — upload via signed URL) ────────────
-router.post('/:id/kyc', authorize('intake_officer'), async (req, res, next) => {
+router.post('/:id/kyc', authorize('facilitator','program_manager','intake_officer'), async (req, res, next) => {
   try {
     const { doc_type, doc_subtype, file_name, file_size_bytes,
             content_type, submission_date, gcs_bucket, gcs_object_path } = req.body;
@@ -234,7 +234,7 @@ router.get('/:id/id-documents', ownClient, async (req, res, next) => {
 });
 
 // ─── REGISTER ID DOCUMENT (metadata only — upload via signed URL) ─────────────
-router.post('/:id/id-documents', authorize('intake_officer'), async (req, res, next) => {
+router.post('/:id/id-documents', authorize('facilitator','program_manager','intake_officer'), async (req, res, next) => {
   try {
     const { doc_type, id_number, issuing_country, expiry_date,
             file_name, content_type, gcs_bucket, gcs_object_path } = req.body;
@@ -274,7 +274,7 @@ router.get('/:id/pof', ownClient, async (req, res, next) => {
 });
 
 // ─── REGISTER POF RECORD ──────────────────────────────────────────────────────
-router.post('/:id/pof', authorize('intake_officer'), async (req, res, next) => {
+router.post('/:id/pof', authorize('facilitator','program_manager','intake_officer'), async (req, res, next) => {
   try {
     const { declared_amount, currency, issuing_bank, issuing_bank_swift,
             submission_date, gcs_bucket, gcs_object_path } = req.body;
@@ -335,7 +335,7 @@ router.get('/:id/ofac', ownClient, async (req, res, next) => {
 // body, with no evidence it came from a real screen. Route kept (not
 // deleted) so a caller gets 410 Gone instead of a 404 that could pass for
 // a typo. See POST .../ofac/override for the real, dual-control path.
-router.post('/:id/ofac', authorize('intake_officer'), (req, res) => {
+router.post('/:id/ofac', authorize('facilitator','program_manager','intake_officer'), (req, res) => {
   res.status(410).json({
     error:       'Gone',
     message:     'This endpoint no longer sets OFAC status from an unverified request body. Automated screening is recorded by the ofac-screening agent directly. For a manual/out-of-band screen, use the dual-control override flow.',
@@ -565,7 +565,7 @@ router.patch('/:id/ofac/override/:result_id/countersign', authorize('facilitator
 const RULE_TYPES = ['kyc_instructions', 'pof_instructions', 'rules_of_the_road'];
 const ACK_METHODS = ['signed_document', 'email_confirmation', 'verbal', 'other'];
 
-router.post('/:id/rules-acknowledgment', authorize('intake_officer', 'program_manager'), async (req, res, next) => {
+router.post('/:id/rules-acknowledgment', authorize('facilitator','program_manager','intake_officer'), async (req, res, next) => {
   try {
     const { rule_type, acknowledgment_method, method_reference } = req.body;
     if (!RULE_TYPES.includes(rule_type)) {
