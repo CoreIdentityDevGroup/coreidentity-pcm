@@ -1,3 +1,5 @@
+> 2026-09-16 status correction: this is the historical July 31 plan. The legacy human-review endpoint was subsequently built; the institutional workflow now has separate immutable screening and independent approval. See [AGENT-12-HISTORY.md](AGENT-12-HISTORY.md) for current evidence, limitations and migration. Historical deployment claims below are not current production proof.
+
 # Implementation Plan — Instrument Integrity Gap Closure
 
 **Status:** Phase 0 built, tested, and validated against real `npm run build`. Not yet deployed.

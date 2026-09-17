@@ -101,8 +101,8 @@ const AGENT_TRACE = {
     file: 'api/routes/assets.js', pattern: "runAgent('bank-routing'", reachable: true,
   },
   'instrument-integrity': {
-    realSite: 'api/routes/assets.js — fire-and-forget at asset creation (POST /); its output IS read later by the appraisal_review gate',
-    file: 'api/routes/assets.js', pattern: "runAgent('instrument-integrity'", reachable: true,
+    realSite: 'api/services/institutional-integrity.js — synchronous registration/revision screening; v2 advancement and matching enforce persisted result and independent verification',
+    file: 'api/routes/institutional.js', pattern: 'await integrity.screen(c,result.rows[0],req.user)', reachable: true,
   },
   'valuation-parser': {
     realSite: 'api/routes/assets.js — fire-and-forget at valuation submission (POST /:id/valuations)',

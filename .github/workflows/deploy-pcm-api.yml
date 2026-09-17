@@ -17,16 +17,18 @@ env:
   ECS_CLUSTER: coreidentity-prod
   ECS_SERVICE: pcm-api
   TASK_FAMILY: coreidentity-prod-pcm-api
-  # PCM API carries DB creds + JWT_SECRET as task-def environment[]; it does not
-  # use the COREG_* Secrets Manager entries (those belong to the dashboard CoreG
-  # card on the sentinel service). No required secrets[] to enforce here.
-  REQUIRED_SECRETS: ""
-  HEALTH_URL: https://api.coregenisis.com/api/v1/health
+  # Institutional deployment requires managed secret references; it refuses
+  # the historical plaintext DB/password environment rather than copying it.
+  REQUIRED_SECRETS: "PCM_DB_CLIENT_PASSWORD,PCM_DB_ASSET_PASSWORD,PCM_DB_PEHF_PASSWORD,PCM_DB_FORMS_PASSWORD,JWT_SECRET,SENTINEL_JWT_SECRET,PCM_MALWARE_SCANNER_TOKEN"
+  HEALTH_URL: https://api.coregenisis.com/ready
 
 jobs:
   deploy:
     name: Build, push, deploy, verify
     runs-on: ubuntu-latest
+    concurrency:
+      group: coreg-production-deploy
+      cancel-in-progress: false
     permissions:
       id-token: write   # required for AWS OIDC (no static keys)
       contents: read
@@ -39,6 +41,12 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
+
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Institutional regression tests
+        run: npm run test:institutional
 
       - name: Validate agents (Phase 6.2 — enforce mode, real CI gate)
         # No PCM_DB_*_HOST secrets injected here -- 2.4's live schema-truth
@@ -99,6 +107,10 @@ jobs:
           old_secrets = td["containerDefinitions"][0].get("secrets") or []
           old_names = {s["name"] for s in old_secrets}
 
+          plaintext_names = {e["name"] for e in td["containerDefinitions"][0].get("environment", [])}
+          if plaintext_names.intersection(required):
+              print("FAIL: migrate required credentials from plaintext environment to managed secrets before deployment", file=sys.stderr)
+              sys.exit(1)
           missing = [n for n in required if n not in old_names]
           if missing:
               print(f"FAIL: current task def is missing required secrets: {missing}", file=sys.stderr)
@@ -210,6 +222,11 @@ jobs:
               if s["name"] in required:
                   print(f"      {s['name']} -> {s['valueFrom']}")
           PY
+
+      - name: Verify candidate runtime before live service update
+        env:
+          TASK_DEF_ARN: ${{ steps.register.outputs.task_def_arn }}
+        run: python3 scripts/ci-institutional-preflight.py
 
       - name: Update ECS service
         env:

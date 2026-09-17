@@ -18,6 +18,7 @@ const morgan       = require('morgan');
 const rateLimit    = require('express-rate-limit');
 const { v4: uuid } = require('uuid');
 require('dotenv').config();
+require('./services/institutional-config').assertConfiguration();
 
 const { errorHandler }   = require('./middleware/error-handler');
 const { requestLogger }  = require('./middleware/request-logger');
@@ -104,9 +105,18 @@ app.use(requestLogger);
 app.use(morgan('combined'));
 
 // ─── ROUTES ───────────────────────────────────────────────────────────────────
+let institutionalReady=process.env.NODE_ENV!=='production';
+app.get('/ready',(_req,res)=>res.status(institutionalReady?200:503).json({ready:institutionalReady}));
 app.get('/ping', (_req, res) => res.json({ ok: true }));
 app.use('/health',    healthRouter);
 app.get('/api/v1/health', healthRouter.coregHealth); // no auth — liveness probe
+app.use('/api/v2/institutional', authenticate, require('./routes/institutional'));
+// Legacy routes do not meet the institutional tenant/transaction access model.
+// Production cutover fails closed; migration must provision the v2 identity and memberships first.
+app.use('/api/v1', (req,res,next) => {
+  if(process.env.NODE_ENV==='production') return res.status(410).json({error:'Use the institutional workspace; legacy access is retired'});
+  next();
+});
 app.use('/api/v1/auth',     authRouter);
 app.use('/api/v1/upload',   authenticate, uploadRouter);
 app.use('/api/v1/download',     authenticate, downloadRouter);
@@ -140,7 +150,10 @@ app.use((_req, res) => {
 app.use(errorHandler);
 
 // ─── START ────────────────────────────────────────────────────────────────────
-app.listen(PORT, '0.0.0.0', () => {
+async function start(){
+ if(process.env.NODE_ENV==='production')await require('./services/institutional-readiness').check();
+ institutionalReady=true;
+ app.listen(PORT, '0.0.0.0', () => {
   console.log(JSON.stringify({
     level: 'info',
     message: 'PCM API started',
@@ -150,4 +163,6 @@ app.listen(PORT, '0.0.0.0', () => {
   }));
 });
 
+}
+start().catch(()=>{console.error(JSON.stringify({level:'error',message:'Institutional readiness failed; refusing to serve traffic'}));process.exitCode=1;Promise.all(Object.values(require('./services/db')).map(p=>p.end())).finally(()=>process.exit(1));});
 module.exports = app;

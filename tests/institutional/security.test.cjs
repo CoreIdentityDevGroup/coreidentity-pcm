@@ -1,0 +1,16 @@
+'use strict';
+const {test}=require('node:test'),assert=require('node:assert/strict'),{generateKeyPairSync}=require('node:crypto');
+const jwt=require('jsonwebtoken'),express=require('express'),request=require('supertest');
+const {authenticate}=require('../../api/middleware/authenticate');
+const {detect,scan,inspectBucket}=require('../../api/services/institutional-vault');
+const {privateKey,publicKey}=generateKeyPairSync('rsa',{modulusLength:2048});
+process.env.PCM_IDP_PUBLIC_KEY=publicKey.export({type:'spki',format:'pem'});process.env.PCM_IDP_ISSUER='https://identity.example';process.env.PCM_IDP_AUDIENCE='coreg';
+const token=(claims={},options={})=>jwt.sign({sub:'alice',amr:['mfa'],auth_time:Math.floor(Date.now()/1000),...claims},privateKey,{algorithm:'RS256',issuer:'https://identity.example',audience:'coreg',expiresIn:'5m',...options});
+const app=express();app.get('/api/v2/institutional/test',authenticate,(req,res)=>res.json({ok:true}));
+for(const [name,claims,options,status]of [['trusted MFA',{}, {},200],['password only',{amr:['pwd']},{},403],['wrong audience',{}, {audience:'other'},401],['wrong issuer',{}, {issuer:'https://attacker.example'},401],['expired',{}, {expiresIn:-1},401]])test(name,async()=>{await request(app).get('/api/v2/institutional/test').set('Authorization','Bearer '+token(claims,options)).expect(status);});
+test('algorithm confusion denied',async()=>{await request(app).get('/api/v2/institutional/test').set('Authorization','Bearer '+jwt.sign({sub:'alice',amr:['mfa']},'fake')).expect(401);});
+test('fake file type rejected',()=>assert.throws(()=>detect(Buffer.from('malicious.exe')),/recognized file signatures/));
+test('PDF recognized for scan',()=>assert.equal(detect(Buffer.from('%PDF-1.7')),'application/pdf'));
+test('unconfigured scanner denies',async()=>{delete process.env.PCM_MALWARE_SCANNER_URL;await assert.rejects(scan(Buffer.from('%PDF-1.7'),'application/pdf'),/not configured/);});
+for(const status of ['clean','infected'])test('unbound '+status+' scanner result denies',async()=>{const original=global.fetch;process.env.PCM_MALWARE_SCANNER_URL='https://scanner.example';process.env.PCM_MALWARE_SCANNER_TOKEN='test';global.fetch=async()=>({ok:true,json:async()=>({status,sha256:'wrong',reference:'r',provider:'test'})});try{await assert.rejects(scan(Buffer.from('%PDF-1.7'),'application/pdf'),/not independently confirmed clean/);}finally{global.fetch=original;}});
+test('missing vault keys denies',async()=>{delete process.env.PCM_KYC_KMS_KEY;await assert.rejects(inspectBucket('kyc'),/encryption keys required/);});
