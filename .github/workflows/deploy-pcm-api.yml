@@ -26,7 +26,6 @@ jobs:
   deploy:
     name: Build, push, deploy, verify
     runs-on: ubuntu-latest
-    environment: production
     concurrency:
       group: coreg-production-deploy
       cancel-in-progress: false
