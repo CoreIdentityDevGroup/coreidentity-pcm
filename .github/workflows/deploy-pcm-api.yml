@@ -7,8 +7,6 @@ on:
   # the rebuild history). This satisfies the condition the 2026-07-31
   # DISABLED-UNTIL-REBUILD commit (6238037) named for re-enabling: "as part
   # of the actual rebuild sequence."
-  push:
-    branches: [main]
   workflow_dispatch:
 
 env:
