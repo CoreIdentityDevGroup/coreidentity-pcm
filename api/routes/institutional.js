@@ -171,5 +171,6 @@ router.post('/transactions/:id/integrity-screening',route(async(c,req)=>{
  if(row.stage==='completed')throw store.fault(409,'Closed evidence is immutable');
  return integrity.screen(c,row,req.user);
 }));
+router.use('/transactions',require('./institutional-external-documents'));
 router.use('/transactions',require('./institutional-vault'));
 module.exports=router;

@@ -25,6 +25,19 @@ test('PostgreSQL migration and institutional API enforcement',async t=>{
   await request(app).post('/transactions/'+A+'/integrity-screening').set('x-test-sub','outsider').send({revision:1}).expect(404);
   assert.equal((await pg.query('SELECT * FROM institutional.integrity_screenings')).rows.length,1);
  });
+ await t.test('external references enforce isolation and cannot substitute for scanned evidence',async()=>{
+  const endpoint='/transactions/'+A+'/external-documents';
+  await request(app).get(endpoint).expect(403);
+  await request(app).get(endpoint).set('x-test-sub','outsider').expect(404);
+  await request(app).get(endpoint).set('x-test-sub','checker').set('x-no-mfa','true').expect(403);
+  const created=await request(app).post(endpoint).set('x-test-sub','checker').send({revision:1,category:'kyc',document_key:'DOC-001'}).expect(200);
+  assert.equal(created.body.gate_eligible,false);
+  await request(app).post('/transactions/'+A+'/reviews').set('x-test-sub','checker').send({revision:1,check_name:'kyc',evidence_document_id:created.body.id,expires_at:'2099-01-01'}).expect(422);
+  const listed=await request(app).get(endpoint).set('x-test-sub','checker').expect(200);
+  assert.equal(listed.headers['cache-control'],'no-store');assert.equal(listed.body.documents.length,1);
+  assert.equal(listed.body.documents[0].scan_status,'not_scanned');
+  await request(app).post(endpoint+'/'+created.body.id+'/review').set('x-test-sub','checker').send({revision:1,outcome:'reviewed_externally'}).expect(409);
+ });
  await t.test('missing MFA denies even administrator',async()=>{await request(app).get('/transactions/'+A).set('x-no-mfa','true').expect(403);});
  await t.test('cross tenant read denied',async()=>{await request(app).get('/transactions/'+A).set('x-test-sub','outsider').expect(404);});
  await t.test('same tenant client needs transaction grant',async()=>{await request(app).get('/transactions/'+A).set('x-test-sub','client').expect(404);const r=await request(app).get('/transactions?tenant_id='+T).set('x-test-sub','client').expect(200);assert.equal(r.body.transactions.length,0);});
