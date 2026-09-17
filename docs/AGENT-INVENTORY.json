@@ -1,0 +1,24 @@
+{
+  "as_of": "2026-09-16",
+  "scope": "Local source inventory, not proof of live execution or valid external credentials",
+  "runtime_module_count": 12,
+  "runtime_modules": [
+    "intake-parser",
+    "asset-classifier",
+    "document-date-validator",
+    "pof-verifier",
+    "ofac-screening",
+    "valuation-parser",
+    "bank-routing",
+    "token-minting",
+    "deletion-certification",
+    "contract-monitoring",
+    "transaction-monitoring",
+    "instrument-integrity"
+  ],
+  "historical_ais_registry_entries": 11,
+  "agent_12_external_identity": "Evidence Required",
+  "institutional_agent_12_entry_point": "api/services/institutional-integrity.js",
+  "institutional_agent_12_enforcement": "all canonical transitions and matching; independent evidence approval required",
+  "note": "Other registered modules may be superseded or have legacy-only invocation; count does not mean 12 active institutional agents"
+}

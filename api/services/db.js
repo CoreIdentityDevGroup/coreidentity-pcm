@@ -3,7 +3,7 @@
 const { Pool } = require('pg');
 
 const sslConfig = process.env.NODE_ENV === 'production'
-  ? { rejectUnauthorized: false }
+  ? { rejectUnauthorized: true, ...(process.env.PCM_DB_CA_PEM ? { ca: process.env.PCM_DB_CA_PEM } : {}) }
   : false;
 
 const poolConfig = (host, database, user, password, port) => ({

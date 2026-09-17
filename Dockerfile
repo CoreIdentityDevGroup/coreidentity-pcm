@@ -23,10 +23,11 @@ COPY --chown=pcmapi:nodejs agents/               ./agents/
 COPY --chown=pcmapi:nodejs scripts/              ./scripts/
 COPY --chown=pcmapi:nodejs agent-orchestrator.js ./
 COPY --chown=pcmapi:nodejs package.json          ./
+COPY --chown=pcmapi:nodejs db/migrations/        ./db/migrations/
 
 EXPOSE 3001
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-  CMD node -e "require('http').get('http://localhost:3001/health', r => process.exit(r.statusCode === 200 ? 0 : 1))"
+  CMD node -e "require('http').get('http://localhost:3001/ready', r => process.exit(r.statusCode === 200 ? 0 : 1))"
 
 ENTRYPOINT ["dumb-init", "--"]
 CMD ["node", "api/app.js"]

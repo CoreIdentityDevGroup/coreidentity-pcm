@@ -268,6 +268,9 @@ router.patch('/:id/deals/:link_id', authorize('facilitator','program_manager','i
 // ─── SEARCH FUNDS BY ASSET TYPE + JURISDICTION ───────────────────────────────
 router.get('/search/match', async (req, res, next) => {
   try {
+    if (!req.query.asset_id) return res.status(422).json({error:'asset_id and institutional compliance approval required before matching'});
+    const admission = await require('../services/institutional-store').requireAdmission(req.query.asset_id, req.user);
+    if (!admission.allowed) return res.status(422).json({error:'Compliance Gate blocked matching', blockers:admission.blockers});
     const { asset_type, jurisdiction, min_deal_size } = req.query;
     let query = `SELECT * FROM pcm_funds WHERE status = 'active'`;
     const params = [];

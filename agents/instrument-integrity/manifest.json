@@ -3,8 +3,8 @@
   "name": "Instrument & Counterparty Integrity Agent",
   "vertical": "private_capital_markets",
   "version": "1.0.0",
-  "trigger": "post_intake_parse",
-  "pipeline_stage": "appraisal_review",
+  "trigger": "institutional_registration_and_approved_fact_revision",
+  "pipeline_stage": "intake",
   "description": "v1 (financial instruments module): validates SWIFT MT structural fields, ISIN/CUSIP checksums, and scores submissions against a fraud-typology library. Never auto-sets 'verified' — requires independent-channel human confirmation. Hard-blocks on high fraud-risk score or structural validation failure.",
   "ais_required": false,
   "ais_required_reason": "aisVerify() (agents/shared/ais-client.js) targets POST /verify on ais-api, which does not exist -- only POST /ca/verify (certificate verification, a different API shape) is real. The module is also ESM in this CommonJS repo with zero require() callers, so it was never reachable at all. Set false 2026-08-14; see CLAIMS-INVENTORY.txt Addendum 5. Do NOT flip true without building a real, reachable check first -- wiring the module in as-written would 404 and throw (fail-closed) on every agent invocation, taking production down.",
@@ -20,8 +20,24 @@
     "max_attempts": 2,
     "backoff_seconds": 3
   },
-  "inputs": ["asset_id", "client_id", "description", "instrument_type", "isin", "cusip", "swift_mt_type", "swift_raw_message"],
-  "outputs": ["status", "action", "instrument_integrity_status", "fraud_risk_score", "matched_patterns", "structural_validation"],
+  "inputs": [
+    "asset_id",
+    "client_id",
+    "description",
+    "instrument_type",
+    "isin",
+    "cusip",
+    "swift_mt_type",
+    "swift_raw_message"
+  ],
+  "outputs": [
+    "status",
+    "action",
+    "instrument_integrity_status",
+    "fraud_risk_score",
+    "matched_patterns",
+    "structural_validation"
+  ],
   "sal_event_types": [
     "agent_started",
     "agent_completed",
@@ -36,9 +52,21 @@
     "pq_signing": "UNSIGNED-NO-PQ-BACKEND-V1"
   },
   "open_items": [
-    "Human-review confirmation endpoint (sets 'verified' after independent-channel counterparty check) not yet built — this agent can only reach 'blocked' or 'pending_human_verification'",
     "Typology library v1.0.0 seeded from demonstrated failure case, not yet cross-validated against FBI IC3 / FinCEN advisory datasets",
     "SWIFT structural validation is field-presence only (v1) — full ISO 15022 grammar parsing is a v1.1 hardening item",
-    "Scoring thresholds (block_threshold: 50, review_threshold: 20) are unvalidated starting values — require calibration against real transaction history"
-  ]
+    "Scoring thresholds (block_threshold: 50, review_threshold: 20) are unvalidated starting values — require calibration against real transaction history",
+    "External AIS identity registration for this twelfth agent requires evidence; local runtime inventory is not an identity credential",
+    "Live production invocation and cloud audit retention require deployment evidence"
+  ],
+  "institutional_integration": {
+    "adapter": "api/services/institutional-integrity.js",
+    "blocking_gates": [
+      "all_stage_advancement",
+      "matching",
+      "monetization"
+    ],
+    "audit": "institutional.events and immutable integrity_screenings",
+    "human_review": "v2 reviews: instrument_integrity, independent channel attestation and separate compliance/legal approval",
+    "legacy": "orchestrator registration exists; v1 production data routes retired by institutional cutover"
+  }
 }

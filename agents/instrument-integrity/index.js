@@ -13,8 +13,9 @@
  * counterparty verification (spec section 3.3) requires a human to confirm
  * through a channel NOT supplied in the submitted documents. This agent can
  * only BLOCK (hard fail) or route to PENDING_HUMAN_VERIFICATION. A separate
- * human-review confirmation step (not yet built — see manifest open_items)
- * is required to ever set 'verified'.
+ * human-review confirmation step is required. The institutional adapter stores
+ * immutable screenings and separately approved independent-channel evidence;
+ * it never overwrites this automated result with a human 'verified' status.
  */
 
 const fs   = require('fs');

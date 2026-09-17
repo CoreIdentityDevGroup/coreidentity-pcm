@@ -11,25 +11,9 @@ const { normalizeRole, isFacilitator } = require('../middleware/authorize');
 // gate by definition (see checkRoleAuthority below), same convention as
 // authorize.js. 'system' stages (tokenization/completed) are unchanged --
 // automated, gated on a recorded system check result, not a human role.
-const STAGES = {
-  intake:           { order: 1, gate_roles: ['intake_officer'],  label: 'Intake and Document Receipt' },
-  // 2026-08-17 (Intake Officer scope, third revision): intake_officer ->
-  // program_manager. Intake Officer no longer advances anything -- see
-  // routes/pipeline.js POST /advance's header comment. This is the only
-  // live path a human actor has to this check for this stage, so leaving
-  // 'intake_officer' here after removing it from that route would be a
-  // stale, unreachable permission entry, not a real one.
-  kyc_verification: { order: 2, gate_roles: ['program_manager'], label: 'KYC / CIS / POF Verification' },
-  appraisal_review: { order: 3, gate_roles: ['program_manager'], label: 'Appraisal / Valuation Review' },
-  bank_assignment:  { order: 4, gate_roles: [],                  label: 'Trader Bank Assignment' },   // Facilitator only
-  collateralization:{ order: 5, gate_roles: [],                  label: 'Collateralization' },        // Facilitator only
-  monetization:     { order: 6, gate_roles: ['program_manager'], label: 'Monetization' },
-  securitization:   { order: 7, gate_roles: ['program_manager'], label: 'Securitization' },
-  tokenization:     { order: 8, gate_roles: ['system'],          label: 'Tokenization' },
-  completed:        { order: 9, gate_roles: ['system'],          label: 'Completed' },
-  rejected:         { order: 0, gate_roles: [],                  label: 'Rejected' },                 // Facilitator only
-  on_hold:          { order: 0, gate_roles: ['program_manager'], label: 'On Hold' }
-};
+const STAGES = Object.fromEntries(require('./institutional-policy').STAGES.map((key,i)=>[key,{order:i+1,gate_roles:['program_manager','intake_officer'],label:require('./institutional-policy').LABELS[i]}]));
+STAGES.rejected={order:0,gate_roles:[],label:'Rejected'};
+STAGES.on_hold={order:0,gate_roles:['program_manager'],label:'On Hold'};
 
 // CLOSE-GAP-30: sequential-stage-order enforcement, previously absent
 // entirely. Reads order from STAGES above -- the same source
@@ -416,6 +400,12 @@ function checkRoleAuthority(to_stage, user, systemCheck, assetOwnership) {
 // evaluation becomes the recorded systemCheck result checkRoleAuthority()
 // requires — evaluated once, not queried twice.
 async function advancePipeline({ asset_id, client_id, to_stage, user, notes }) {
+  if (['monetization','securitization','tokenization','completed'].includes(to_stage)) {
+    try {
+      const admission = await require('./institutional-store').requireAdmission(asset_id, user);
+      if (!admission.allowed) return {success:false, code:422, error:'Compliance Gate blocked advancement', gate_errors:admission.blockers};
+    } catch (error) { return {success:false, code:error.status || 503, error:'Institutional evidence unavailable or access denied'}; }
+  }
   const stage = STAGES[to_stage];
   if (!stage) {
     return { success: false, code: 400, error: `Unknown stage: ${to_stage}`, block_reason: 'blocked_error' };
