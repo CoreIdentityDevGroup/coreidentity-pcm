@@ -1,0 +1,35 @@
+name: CoreIdentity AWS readiness audit
+on:
+  push:
+    branches: [codex/institutional-production-20260917]
+    paths:
+      - .github/workflows/aws-readiness-audit.yml
+      - scripts/audit-aws-readiness.py
+  workflow_dispatch:
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - name: Authenticate through existing CoreIdentity federation
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-2
+          role-duration-seconds: 900
+          retry-max-attempts: 2
+          allowed-account-ids: '636058550262'
+          inline-session-policy: >-
+            {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["sts:GetCallerIdentity","ecs:DescribeServices","ecs:DescribeTaskDefinition","rds:DescribeDBInstances","cognito-idp:ListUserPools","s3:ListAllMyBuckets","secretsmanager:ListSecrets"],"Resource":"*"}]}
+      - name: Inspect configuration without retrieving secrets or changing resources
+        run: python3 scripts/audit-aws-readiness.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coreidentity-aws-readiness
+          path: aws-readiness.json
+          retention-days: 7
+          if-no-files-found: error
