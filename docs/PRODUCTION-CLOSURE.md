@@ -1,3 +1,5 @@
+> Superseded access/deployment findings: see LIVE-READINESS-2026-09-17.md. CoreIdentity OIDC access now verified; managed credentials already present; 84 tests pass. Provider/cutover gaps remain open.
+
 # Production closure status — September 17, 2026
 
 Status: IN PROGRESS. Production authorization was given by the user. No production deployment or cloud mutation has been performed. The local AWS default and root profiles both return InvalidClientTokenId; related inventory calls return UnrecognizedClientException/InvalidAccessKeyId. GitHub access works. Main remains at backend b493b60d57843d7c824ff6ee60f0dee8468a3550 and portal 481de66653bbff1b7b6996d592f36ad3a65b2ead.
